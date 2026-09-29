@@ -1,0 +1,37 @@
+{
+  "name": "sailing-school",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Interactive 3D sailing school: see how wind drives a sailboat.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "snap": "node scripts/snap.mjs",
+    "polars": "vite-node scripts/polars.ts",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "postprocessing": "~6.39.5",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "^26.6.3",
+    "@types/three": "0.186.0",
+    "playwright-core": "1.62.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vite-node": "^6.0.0",
+    "vitest": "^5.0.2"
+  },
+  "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": ">=22"
+  }
+}

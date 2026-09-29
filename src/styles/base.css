@@ -1,0 +1,18 @@
+:root {
+  color-scheme: dark;
+  --ink: #f4f7fb;
+  --ink-dim: #b8c6d6;
+  --panel: rgba(9, 24, 40, 0.72);
+  --panel-edge: rgba(255, 255, 255, 0.12);
+  --accent: #ff7a1a;
+  --port: #e5484d;
+  --stbd: #30a46c;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1f33; color: var(--ink); }
+#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#ui { position: fixed; inset: 0; pointer-events: none; }
+#ui > * { pointer-events: auto; }
+.fallback { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; background: #0b1f33; }
+.fallback h1 { font-size: 22px; margin: 0 0 8px; }
+.fallback p { color: var(--ink-dim); max-width: 36em; line-height: 1.5; }
