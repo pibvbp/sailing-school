@@ -1,4 +1,5 @@
-// Sails demo: SailsView driven by a mock snapshot (demos/sailsMock.ts) on a stand-in boat.
+// Sails demo: SailsView driven by a mock snapshot (demos/sailsMock.ts) or the real simulation (?sim=1), on the
+// real Kestrel 25 (?boat=stand: the original stand-in hull and rig instead).
 // Everything is settable from the URL for reproducible screenshots, e.g.
 //   sails.html?prod=1&preset=beat&cam=quarter&hour=17&sun=behind     (production renderer, sky, light, post)
 //   sails.html?preset=run&cam=spin      sails.html?anim=tack&cam=side      sails.html?colour=aoa
@@ -8,7 +9,7 @@ import * as THREE from 'three';
 import { SailsView } from '../src/render/sails/SailsView';
 import { tierSettings, type QualityTier } from '../src/render/core/types';
 import { defaultMock, mockSails, mockWind, type MockParams } from './sailsMock';
-import { Stage, cameraPreset } from './sailsStage';
+import { RealBoat, StandInBoat, cameraPreset, makeWater, type DemoBoat, type DemoPose } from './sailsStage';
 import { createHost } from './sailsProd';
 import { Simulation } from '../src/sim/simulation';
 import { AutoCrew } from '../src/sim/autocrew';
@@ -54,7 +55,8 @@ const tier = (q.get('tier') ?? 'high') as QualityTier;
 const boat = new THREE.Group();
 boat.rotation.order = 'YXZ';
 kit.scene.add(boat);
-const stage = new Stage(kit.scene, boat, kit.prod);
+makeWater(kit.scene, kit.prod);
+const hull: DemoBoat = q.get('boat') === 'stand' ? new StandInBoat(boat) : new RealBoat(boat, tierSettings(tier));
 kit.follow(boat);
 const view = new SailsView(tierSettings(tier));
 boat.add(view.root);
@@ -198,6 +200,8 @@ const animate = (t: number) => {
 // Control panel (hidden with ?ui=0).
 if (q.get('ui') !== '0') buildPanel();
 
+const DEG = Math.PI / 180;
+const pose: DemoPose = { heel: 0, rudder: 0, crewY: 0, sheets: { main: 0.7, jib: 0.7, spin: 0.5 } };
 const cpu: number[] = [];
 let frameCount = 0;
 const step = (dt: number, t: number): void => {
@@ -207,12 +211,21 @@ const step = (dt: number, t: number): void => {
     const snap = simStep(dt);
     sails = snap.sails;
     wind = snap.wind;
+    const c = sim.controls;
+    pose.heel = snap.boat.heel; pose.rudder = snap.boat.rudder; pose.crewY = snap.boat.crewHike;
+    pose.sheets.main = c.mainSheet; pose.sheets.jib = c.jibSheet; pose.sheets.spin = c.spinSheet;
   } else {
     animate(t);
     sails = mockSails(params);
     wind = mockWind(params);
+    // The mock has no helm or crew: sit the crew on the windward rail as the boat heels; sheets follow the trim.
+    const ws = params.awa >= 0 ? 1 : -1;
+    pose.heel = -boat.rotation.z; pose.rudder = 0; pose.crewY = ws * Math.min(1, 0.3 + Math.abs(pose.heel) / (15 * DEG));
+    pose.sheets.main = 1 - Math.min(Math.abs(params.boom) / 80, 1);
+    pose.sheets.jib = 1 - Math.min(Math.abs(params.clew) / 45, 1);
+    pose.sheets.spin = params.spinSheet;
   }
-  stage.update(sails);
+  hull.update(sails, dt, pose);
   const a = performance.now();
   view.update(dt, t, sails, wind);
   // Statistics skip the first two seconds (JIT warm-up, first-use allocations).

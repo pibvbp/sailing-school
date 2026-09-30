@@ -135,8 +135,10 @@ class DacronLayers {
     this.albedo = new PlanCanvas(plan, W, H, `rgb(${CLOTH.join(',')})`);
     this.plies = new PlanCanvas(plan, W, H, `rgb(${PLY},${PLY},${PLY})`);
     this.plies.g.globalCompositeOperation = 'lighter';
-    this.stbd = new PlanCanvas(plan, W, H, null);
-    this.port = new PlanCanvas(plan, W, H, null);
+    // Decals (stripes, insignia, numbers) are bold shapes: half resolution is ample and halves their memory.
+    const dw = Math.max(64, Math.round(W / 2)), dh = Math.max(64, Math.round(H / 2));
+    this.stbd = new PlanCanvas(plan, dw, dh, null);
+    this.port = new PlanCanvas(plan, dw, dh, null);
     this.rand = rng(seed);
   }
 

@@ -63,6 +63,9 @@ export class SpinnakerModel {
   events: Array<'spinCollapse' | 'spinRefill'> = [];
   last: SpinEvaluation | null = null;
   private poleT = 0;
+  /** Side of the pole tip, continuous: in an end-for-end gybe it swings across instead of jumping. */
+  private poleSide = 1;
+  private poleFrom = 1;
   private lowT = 0;
   private highT = 0;
   private collapseTarget = 0;
@@ -72,6 +75,7 @@ export class SpinnakerModel {
   syncControls(c: Controls): void {
     this.sheet = clamp(c.spinSheet, 0, 1);
     this.primed = true;
+    this.poleSide = this.poleFrom = this.windwardSide;
   }
 
   poleAngle(c: Controls): number { return clamp(c.spinPole, 0, 1) * 90 * DEG; }
@@ -82,6 +86,15 @@ export class SpinnakerModel {
     const reach = Math.sqrt(Math.max(S.poleLength ** 2 - (h - S.poleMastH) ** 2, 0.1));
     const a = this.poleAngle(c);
     return { x: MAST_FRONT_X + reach * Math.cos(a), y: this.windwardSide * reach * Math.sin(a), z: -h };
+  }
+
+  /**
+   * Where the pole itself is. In an end-for-end gybe the kite's corners stay where they are and swap roles (the old
+   * clew becomes the new tack); the pole is unclipped and carried across the bow to the new tack over the transfer.
+   */
+  drawnPoleTip(c: Controls): Vec3 {
+    const tip = this.poleTip(c);
+    return { x: tip.x, y: tip.y * this.windwardSide * this.poleSide, z: tip.z };
   }
 
   private chordAt(psi: number): { x: number; y: number } {
@@ -233,9 +246,13 @@ export class SpinnakerModel {
     const s = side ?? sideFromAwa(this.windwardSide, awaRef);
     if (s !== this.windwardSide) {
       this.windwardSide = s;
+      this.poleFrom = this.poleSide;
       if (this.hoist > 0.05) { this.poleOn = false; this.poleT = 0; }
     }
     if (!this.poleOn) { this.poleT += dt; if (this.poleT >= POLE_TRANSFER_S) this.poleOn = true; }
+    // The pole goes end-for-end: it swings across the bow over the transfer, reaching the new tack as it clips on.
+    this.poleSide = this.poleOn ? this.windwardSide
+      : lerp(this.poleFrom, this.windwardSide, smoothstep(0, POLE_TRANSFER_S, this.poleT));
 
     // Where does the sheet let the clew sit, where can the sail physically go, and where does the wind
     // want it? Easing beyond the geometric limit unloads the luff (curl, then collapse) instead of turning
@@ -287,7 +304,7 @@ export class SpinnakerModel {
       telltales: [],
       hoist: this.hoist,
       poleAngle: this.poleAngle(c),
-      poleTip: ev.tack,
+      poleTip: this.drawnPoleTip(c),
       poleHeight: -ev.tack.z,
       collapsed: this.collapsed,
       curl: this.curl,

@@ -11,7 +11,10 @@ import * as THREE from 'three';
 import type { SailSection } from '../../sim/types';
 import type { Vec3 } from '../../shared/math';
 
-export const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+/** Clamp to [0, 1]; NaN → 0. */
+export const clamp01 = (x: number): number => (x > 0 ? (x < 1 ? x : 1) : 0);
+/** `x` if finite, else the fallback. */
+export const fin = (x: number, fallback: number): number => (Number.isFinite(x) ? x : fallback);
 export const smooth = (e0: number, e1: number, x: number): number => {
   const t = clamp01((x - e0) / (e1 - e0));
   return t * t * (3 - 2 * t);
@@ -191,9 +194,14 @@ export class SailRows {
       if (!(s.h > 0.002 && s.h < 0.998)) continue;
       const lx = s.luff.y, ly = -s.luff.z, lz = -s.luff.x;
       const c = s.chord > 0 ? s.chord : 0;
+      const tx = lx + s.chordDir.y * c, ty = ly - s.chordDir.z * c, tz = lz - s.chordDir.x * c;
+      // A non-finite section is skipped (the curves span the gap); its scalars fall back to neutral values,
+      // so one bad snapshot cannot poison the side fields and filters downstream.
+      if (!Number.isFinite(lx + ly + lz + tx + ty + tz)) continue;
       lc.push3(s.h, lx, ly, lz);
-      tc.push3(s.h, lx + s.chordDir.y * c, ly - s.chordDir.z * c, lz - s.chordDir.x * c);
-      a[0] = s.camber; a[1] = s.draft; a[2] = s.leewardY; a[3] = s.luffing; a[4] = s.stall; a[5] = s.aoa;
+      tc.push3(s.h, tx, ty, tz);
+      a[0] = fin(s.camber, 0); a[1] = fin(s.draft, 0.45); a[2] = fin(s.leewardY, 0);
+      a[3] = fin(s.luffing, 0); a[4] = fin(s.stall, 0); a[5] = fin(s.aoa, 0);
       sc.push(s.h, a);
     }
     lc.push3(1, head.x, head.y, head.z);
@@ -267,14 +275,27 @@ export class SailPlan {
 
   /** Luff (a) and leech (b) plan points of the row at height fraction v. */
   rowAt(v: number): { a: PlanPoint; b: PlanPoint } {
+    const a = { x: 0, y: 0 }, b = { x: 0, y: 0 };
+    this.rowInto(v, a, b);
+    return { a, b };
+  }
+
+  /** Allocation-free {@link rowAt}: luff point into `a`, leech point into `b`. */
+  rowInto(v: number, a: PlanPoint, b: PlanPoint): void {
     const n = this.luff.length - 1;
     const f = clamp01(v) * n;
     const i = Math.min(Math.floor(f), n - 1), t = f - i;
     const la = this.luff[i]!, lb = this.luff[i + 1]!, ta = this.leech[i]!, tb = this.leech[i + 1]!;
-    return {
-      a: { x: la.x + (lb.x - la.x) * t, y: la.y + (lb.y - la.y) * t },
-      b: { x: ta.x + (tb.x - ta.x) * t, y: ta.y + (tb.y - ta.y) * t },
-    };
+    a.x = la.x + (lb.x - la.x) * t; a.y = la.y + (lb.y - la.y) * t;
+    b.x = ta.x + (tb.x - ta.x) * t; b.y = ta.y + (tb.y - ta.y) * t;
+  }
+
+  /** Allocation-free {@link at}. */
+  atInto(u: number, v: number, out: PlanPoint): PlanPoint {
+    this.rowInto(v, PLAN_A, PLAN_B);
+    out.x = PLAN_A.x + (PLAN_B.x - PLAN_A.x) * u;
+    out.y = PLAN_A.y + (PLAN_B.y - PLAN_A.y) * u;
+    return out;
   }
 
   /** Plan position of grid point (u, v): straight chord line between luff and leech. */
@@ -283,6 +304,9 @@ export class SailPlan {
     return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
   }
 }
+
+const PLAN_A: PlanPoint = { x: 0, y: 0 };
+const PLAN_B: PlanPoint = { x: 0, y: 0 };
 
 /** Build a plan from densely sampled (flat, nominal) rows, mapping boat-local points to plan metres. */
 export function planFromRows(rows: SailRows, toPlan: (x: number, y: number, z: number) => PlanPoint, margin = 0.04): SailPlan {
@@ -390,8 +414,9 @@ export class SailSurface {
 
   /** Set the texture coordinates from a plan; `uShift` maps u ∈ [0,1] onto [uShift, 1] (furled jib). */
   setPlanUV(plan: SailPlan, uShift = 0): void {
+    const a = PLAN_A, b = PLAN_B;
     for (let j = 0; j < this.nv; j++) {
-      const { a, b } = plan.rowAt(j / (this.nv - 1));
+      plan.rowInto(j / (this.nv - 1), a, b);
       for (let i = 0; i < this.nu; i++) {
         const u = uShift + this.u[i]! * (1 - uShift);
         const k = (j * this.nu + i) * 2;
@@ -405,6 +430,26 @@ export class SailSurface {
   /** Snap to the target on the next `follow` (e.g. after a teleport or when a sail is re-shown). */
   reset(): void { this.initialised = false; }
 
+  /** True once the springs hold a state (the first `follow` snaps to the target). */
+  get live(): boolean { return this.initialised; }
+
+  /**
+   * Swap columns i ↔ nu − 1 − i of the spring state (u → 1 − u; exact for a uniform u grid): the cloth that
+   * was at the leech is now addressed as the luff. A spinnaker gybe does exactly this — the old clew is
+   * clipped to the pole and becomes the new tack.
+   */
+  mirrorColumns(): void {
+    const { nu, nv } = this;
+    for (const arr of [this.pos, this.vel, this.out, this.nrm]) {
+      for (let j = 0; j < nv; j++) {
+        for (let i = 0; i < nu >> 1; i++) {
+          const a = (j * nu + i) * 3, b = (j * nu + nu - 1 - i) * 3;
+          for (let c = 0; c < 3; c++) { const t = arr[a + c]!; arr[a + c] = arr[b + c]!; arr[b + c] = t; }
+        }
+      }
+    }
+  }
+
   /** Advance the spring–damper toward `target`. */
   follow(dt: number): void {
     const { target, pos, vel } = this;
@@ -414,7 +459,7 @@ export class SailSurface {
       this.initialised = true;
       return;
     }
-    const h = Math.min(Math.max(dt, 0), 1 / 15);
+    const h = dt > 0 ? Math.min(dt, 1 / 15) : 0;
     if (h === 0) return;
     for (let k = 0; k < this.count; k++) {
       const o = k * 3;
@@ -566,6 +611,24 @@ const SNAP = 2.3;
 const SNAP_NORM = 1 / tanhFast(SNAP);
 
 /**
+ * Phases (in cycles) of the wind-dependent motions, integrated frame by frame. A frequency that follows the
+ * apparent wind must never be multiplied by absolute time: sin(2π·f(aws)·t) jumps by Δf·t whenever the wind
+ * changes, which after a few minutes of sailing turns flogging and flutter into noise.
+ */
+export interface ClothPhase { flog: number; leech: number }
+
+/** Leech-flutter frequency (Hz) at apparent wind speed `aws` (m/s). */
+export const leechFlutterHz = (aws: number): number => 5.5 + 0.45 * Math.max(0, aws);
+
+/** Advance a sail's cloth phases by `dt` at the current apparent wind (dt = 0 holds them: pause). */
+export function advancePhase(phase: ClothPhase, p: FlutterParams, aws: number, dt: number): void {
+  if (!(dt > 0)) return;
+  const w = aws > 0 ? aws : 0;
+  phase.flog += (p.f0 + p.fPerMs * w) * dt;
+  phase.leech += leechFlutterHz(w) * dt;
+}
+
+/**
  * Write `out = pos + displacement · N_row` with the procedural cloth motion:
  *  - partial luffing: a shiver running aft from the luff (the edge of the luff bubble);
  *  - full luffing, or cloth that is flat because it is flipping sides (per-vertex `side` ≈ 0): flogging —
@@ -577,13 +640,11 @@ const SNAP_NORM = 1 / tanhFast(SNAP);
  */
 export function exciteCloth(
   s: SailSurface, rows: SailRows, luffing: Float32Array, side: Float32Array,
-  p: FlutterParams, t: number, aws: number, env: Float32Array, leechEnv: Float32Array,
+  p: FlutterParams, phase: ClothPhase, t: number, aws: number, env: Float32Array, leechEnv: Float32Array,
 ): void {
   const { nu, nv, pos, out, u } = s;
   const N = rows.N;
-  const w = Math.max(0, aws);
-  const f = p.f0 + p.fPerMs * w;
-  const fl = 5.5 + 0.45 * w;
+  const w = aws > 0 ? aws : 0;
   // Leech flutter grows with the square of the breeze: nothing in light air, obvious in a fresh one.
   const aLeech = p.aLeech * w * Math.min(w / 8, 1.8);
   const TAU = Math.PI * 2;
@@ -598,8 +659,8 @@ export function exciteCloth(
     const chordAmp = Math.min(1, 0.25 + chord / 1.4);
     const y = rows.v[j]! * p.height;
     const phY = 0.9 * y + wobble * Math.sin(0.5 * y + 0.3);
-    const tf = f * t;
-    const leechPh = TAU * (fl * t - y / 0.9);
+    const tf = phase.flog;
+    const leechPh = TAU * (phase.leech - y / 0.9);
     const leechMod = aLeech * (0.7 + 0.3 * Math.sin(TAU * 0.37 * t + y));
     for (let i = 0; i < nu; i++) {
       const k = j * nu + i, ko = k * 3;
@@ -660,7 +721,7 @@ export class SideField {
       this.init = true;
       return value;
     }
-    if (dt <= 0) return value;
+    if (!(dt > 0)) return value;
     for (let i = 0; i < nu; i++) this.alpha[i] = 1 - Math.exp(-dt / this.tau[i]!);
     for (let j = 0; j < nv; j++) {
       const target = rowSide[j]!;
@@ -671,6 +732,28 @@ export class SideField {
   }
 
   reset(): void { this.init = false; }
+
+  /** Swap columns i ↔ nu − 1 − i (the cloth was relabelled: see SailSurface.mirrorColumns). */
+  mirrorColumns(): void {
+    const { nu, nv, value } = this;
+    for (let j = 0; j < nv; j++) {
+      const o = j * nu;
+      for (let i = 0; i < nu >> 1; i++) {
+        const a = o + i, b = o + nu - 1 - i, t = value[a]!;
+        value[a] = value[b]!;
+        value[b] = t;
+      }
+    }
+  }
+
+  /**
+   * Negate every value: the rows' chord (and so the cloth normal N) reversed, so the same belly in space is
+   * now −side · N.
+   */
+  negate(): void {
+    const v = this.value;
+    for (let k = 0; k < v.length; k++) v[k] = -v[k]!;
+  }
 }
 
 /** First-order low-pass of per-row values (the sim's leewardY is a hard ±1 sign; the cloth must flip). */
@@ -679,7 +762,7 @@ export class RowFilter {
   private init = false;
   constructor(n: number) { this.value = new Float32Array(n); }
   update(src: Float32Array, dt: number, tau: number): Float32Array {
-    if (!this.init || dt <= 0) {
+    if (!this.init || !(dt > 0)) {
       if (!this.init) { this.value.set(src); this.init = true; }
       return this.value;
     }

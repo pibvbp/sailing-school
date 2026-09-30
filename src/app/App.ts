@@ -271,6 +271,7 @@ export class App implements AppApi {
     this.sim = this.makeSim(init);
     this.loop.reset();
     this.syncPrevPose();
+    this.sails.reset();
     this.heave.x = this.heave.v = this.pitch.x = this.pitch.v = this.roll.x = this.roll.v = 0;
     this.applyOceanParams();
     this.hud.syncState({ wind: { ...this.sim.wind.settings } });
@@ -356,6 +357,7 @@ export class App implements AppApi {
     this.lighting.setQuality(q);
     this.ocean.setQuality(q);
     this.ov.setQuality(q);
+    this.sails.setQuality(q);
     this.resize();
     this.hud.syncState({ qualityActual: this.qualityLock === 'auto' ? q.tier : null });
   }
@@ -415,7 +417,8 @@ export class App implements AppApi {
         visible: sails.spinnaker.set,
         poleAngle: sails.spinnaker.poleAngle,
         poleTipH: sails.spinnaker.poleHeight,
-        tack: sails.spinnaker.tack,
+        // The boat draws the pole to this point: the pole itself, which swings across the bow in a gybe.
+        tack: sails.spinnaker.poleTip,
         clew: sails.spinnaker.clew,
       },
       crewY: snap.boat.crewHike,

@@ -21,16 +21,20 @@ export class Burgee {
   private readonly pos = new Float32Array(NU * NV * 3);
   private readonly nrm = new Float32Array(NU * NV * 3);
   private readonly geometry = new THREE.BufferGeometry();
-  private readonly texture = makeBurgeeTexture();
+  /** Canvas texture in the browser; none in Node (unit tests). */
+  private readonly texture: THREE.Texture | null = typeof document === 'undefined' ? null : makeBurgeeTexture();
   private readonly flagMat: THREE.MeshStandardMaterial;
   private readonly stickMat = new THREE.MeshStandardMaterial({ color: 0x1a1c1f, roughness: 0.5 });
   private readonly stickGeo = new THREE.CylinderGeometry(0.005, 0.005, 0.3, 8);
   private angle = 0;
   private rate = 0;
   private init = false;
+  /** Integrated flap phase (cycles): its frequency follows the wind, so it must not be f·t. */
+  private flap = 0;
 
   constructor() {
     this.group.name = 'burgee';
+    this.flagPivot.name = 'burgee-flag';
     const top = BOAT.backstay.top, bot = BOAT.backstay.bottom;
     const k = (top.h - BURGEE_H) / (top.h - bot.h);
     const x = top.x + (bot.x - top.x) * k;
@@ -62,10 +66,12 @@ export class Burgee {
 
   /** `awaDeck` (rad, + from starboard) and `awsDeck` (m/s): the apparent wind at deck height. */
   update(dt: number, t: number, awaDeck: number, awsDeck: number): void {
-    const aws = Math.max(awsDeck, 0);
-    const target = -awaDeck;
-    if (!this.init) { this.angle = target; this.init = true; }
-    const h = Math.min(Math.max(dt, 0), 1 / 30);
+    const aws = awsDeck > 0 ? awsDeck : 0;
+    // Non-finite input holds the flag where it is; a non-finite state re-seats it on the wind.
+    if (!Number.isFinite(this.angle + this.rate + this.flap)) { this.init = false; this.flap = 0; }
+    const target = Number.isFinite(awaDeck) ? -awaDeck : this.init ? this.angle : 0;
+    if (!this.init) { this.angle = target; this.rate = 0; this.init = true; }
+    const h = dt > 0 ? Math.min(dt, 1 / 30) : 0;
     const w = 4 + 0.5 * aws;
     this.rate += (w * w * wrapPi(target - this.angle) - 2 * 0.45 * w * this.rate) * h;
     this.angle = wrapPi(this.angle + this.rate * h);
@@ -73,7 +79,8 @@ export class Burgee {
 
     const strong = smooth(1, 8, aws);
     const slack = 1 - smooth(0.4, 3.5, aws);
-    const f = 1.4 + 0.55 * aws;
+    this.flap += (1.4 + 0.55 * aws) * h;
+    const ph = this.flap;
     const lambda = 0.2 + 0.015 * aws;
     const TAU = Math.PI * 2;
     for (let j = 0; j < NV; j++) {
@@ -81,7 +88,7 @@ export class Burgee {
       for (let i = 0; i < NU; i++) {
         const u = i / (NU - 1), k = (j * NU + i) * 3;
         const amp = u * (0.012 + 0.03 * strong) + slack * 0.02 * u;
-        const x = amp * (Math.sin(TAU * (f * t - (u * FLY) / lambda) + 0.8 * s) + 0.35 * Math.sin(TAU * (1.7 * f * t - (u * FLY) / (0.55 * lambda)) + 1.3));
+        const x = amp * (Math.sin(TAU * (ph - (u * FLY) / lambda) + 0.8 * s) + 0.35 * Math.sin(TAU * (1.7 * ph - (u * FLY) / (0.55 * lambda)) + 1.3));
         const y = s * HOIST * (1 - 0.92 * u) - slack * 0.8 * FLY * u * u;
         const z = u * FLY * (1 - 0.35 * slack * u);
         this.pos[k] = x; this.pos[k + 1] = y; this.pos[k + 2] = z;
@@ -104,9 +111,15 @@ export class Burgee {
     this.geometry.getAttribute('normal').needsUpdate = true;
   }
 
+  /** Snap to the wind on the next update (scenario change). */
+  reset(): void { this.init = false; this.rate = 0; }
+
+  /** Current flag yaw about the swivel (rad; −awaDeck when settled, the fly streaming downwind). */
+  get flagYaw(): number { return this.flagPivot.rotation.y; }
+
   dispose(): void {
     this.geometry.dispose();
-    this.texture.dispose();
+    this.texture?.dispose();
     this.flagMat.dispose();
     this.stickMat.dispose();
     this.stickGeo.dispose();

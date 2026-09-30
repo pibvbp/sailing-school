@@ -1,9 +1,12 @@
-// Stand-in boat for the sails demo (the real boat is Task 12's module): a lofted hull with boot stripe,
-// deck and cabin, the mast with spreaders, boom, standing rigging, furler foil, spinnaker pole, sheets,
-// and a rippled water plane — just enough that screenshots read as a keelboat under sail.
+// Boats and water for the sails demo. By default the real Kestrel 25 (src/render/boat) carries the sails,
+// posed from the snapshot the way App does it; ?boat=stand swaps in the original stand-in (a lofted hull
+// with boot stripe, deck and cabin, mast, boom, rigging, furler foil, pole and sheets). The water is a
+// rippled plane either way — just enough that screenshots read as a keelboat under sail.
 import * as THREE from 'three';
 import { BOAT } from '../src/shared/boatSpec';
 import type { SimSnapshot } from '../src/sim/types';
+import type { QualitySettings } from '../src/render/core/types';
+import { BoatModel } from '../src/render/boat/BoatModel';
 
 const H = BOAT.hull;
 const local = (x: number, y: number, h: number): THREE.Vector3 => new THREE.Vector3(y, h, -x);
@@ -126,8 +129,59 @@ function rippleNormals(): THREE.DataTexture {
   return t;
 }
 
-export class Stage {
-  readonly water: THREE.Mesh;
+/** What the demo knows about the boat beyond the sails (the mock has no helm or crew of its own). */
+export interface DemoPose {
+  /** Heel (rad, + starboard down). */
+  heel: number;
+  /** Rudder (rad, + turns to starboard). */
+  rudder: number;
+  /** Crew −1 port … +1 starboard. */
+  crewY: number;
+  /** Sheet trim 0 eased … 1 hard in. */
+  sheets: { main: number; jib: number; spin: number };
+}
+
+export interface DemoBoat {
+  update(s: SimSnapshot['sails'], dt: number, pose: DemoPose): void;
+}
+
+/** The dark rippled sea plane. */
+export function makeWater(scene: THREE.Scene, prod = false): THREE.Mesh {
+  // In the production path the water matches demos/env.ts (dark, glossy, ior 1.333, unfogged).
+  const waterMat = prod
+    ? new THREE.MeshPhysicalMaterial({ color: new THREE.Color().setRGB(0.004, 0.016, 0.022, THREE.LinearSRGBColorSpace), roughness: 0.12, metalness: 0, ior: 1.333, normalMap: rippleNormals(), normalScale: new THREE.Vector2(0.55, 0.55), fog: false })
+    : new THREE.MeshPhysicalMaterial({ color: 0x06243b, roughness: 0.06, metalness: 0, normalMap: rippleNormals(), normalScale: new THREE.Vector2(0.55, 0.55) });
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2), waterMat);
+  water.receiveShadow = true;
+  scene.add(water);
+  return water;
+}
+
+/** The real boat model, posed from the snapshot as App does (setPose, then update, before the sails). */
+export class RealBoat implements DemoBoat {
+  readonly model: BoatModel;
+  constructor(boat: THREE.Group, q: QualitySettings) {
+    this.model = new BoatModel(q);
+    boat.add(this.model.root);
+  }
+  update(s: SimSnapshot['sails'], dt: number, pose: DemoPose): void {
+    const sp = s.spinnaker;
+    this.model.setPose({
+      boomAngle: s.main.boomAngle,
+      rudder: pose.rudder,
+      jibClew: s.jib.clew,
+      jibFurl: s.jib.furl,
+      spin: { visible: sp.set, poleAngle: sp.poleAngle, poleTipH: sp.poleHeight, tack: sp.tack, clew: sp.clew },
+      crewY: pose.crewY,
+      heel: pose.heel,
+      sheets: pose.sheets,
+    });
+    this.model.update(dt);
+  }
+}
+
+/** The original stand-in boat (?boat=stand). */
+export class StandInBoat implements DemoBoat {
   private readonly boom = new THREE.Group();
   private readonly pole: Stick;
   private readonly jibSheet: Stick;
@@ -135,7 +189,7 @@ export class Stage {
   private readonly spinSheet: Stick;
   private readonly spinGuy: Stick;
 
-  constructor(scene: THREE.Scene, boat: THREE.Group, prod = false) {
+  constructor(boat: THREE.Group) {
     const gel = new THREE.MeshPhysicalMaterial({ color: 0xf3f3f0, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.08 });
     gel.onBeforeCompile = (s) => {
       s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nvarying float vH;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvH = position.y;');
@@ -200,14 +254,6 @@ export class Stage {
     this.mainSheet = new Stick(0.006, rope, boat);
     this.spinSheet = new Stick(0.005, orange, boat);
     this.spinGuy = new Stick(0.005, orange, boat);
-
-    // In the production path the water matches demos/env.ts (dark, glossy, ior 1.333, unfogged).
-    const waterMat = prod
-      ? new THREE.MeshPhysicalMaterial({ color: new THREE.Color().setRGB(0.004, 0.016, 0.022, THREE.LinearSRGBColorSpace), roughness: 0.12, metalness: 0, ior: 1.333, normalMap: rippleNormals(), normalScale: new THREE.Vector2(0.55, 0.55), fog: false })
-      : new THREE.MeshPhysicalMaterial({ color: 0x06243b, roughness: 0.06, metalness: 0, normalMap: rippleNormals(), normalScale: new THREE.Vector2(0.55, 0.55) });
-    this.water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2), waterMat);
-    this.water.receiveShadow = true;
-    scene.add(this.water);
   }
 
   update(s: SimSnapshot['sails']): void {

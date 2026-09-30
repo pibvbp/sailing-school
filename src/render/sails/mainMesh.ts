@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { BOAT } from '../../shared/boatSpec';
 import type { MainState, SailSection } from '../../sim/types';
 import {
-  RowFilter, SailRows, SailSurface, SideField, breathing, camberShape, exciteCloth, planFromRows, smooth, toLocal, writeState,
-  type FlutterParams, type PlanPoint, type SailPlan,
+  RowFilter, SailRows, SailSurface, SideField, advancePhase, breathing, camberShape, exciteCloth, planFromRows, smooth, toLocal,
+  writeState, type ClothPhase, type FlutterParams, type PlanPoint, type SailPlan,
 } from './sailMesh';
 
 const G = BOAT.boom.gooseneck;
@@ -105,6 +105,7 @@ export class MainShape {
   private readonly sideEff: Float32Array;
   private readonly luffF: RowFilter;
   private battensInit = false;
+  private readonly phase: ClothPhase = { flog: 0, leech: 0 };
   private readonly tack = new THREE.Vector3();
   private readonly clew = new THREE.Vector3();
   private readonly head = new THREE.Vector3();
@@ -170,6 +171,8 @@ export class MainShape {
   }
 
   update(dt: number, t: number, s: MainState, aws: number): void {
+    dt = dt > 0 ? dt : 0; // NaN / negative → no step
+    aws = aws > 0 ? aws : 0;
     const { rows, surface } = this;
     toLocal(s.tack, this.tack).y += MAIN_FOOT_LIFT;
     toLocal(s.clew, this.clew).y += MAIN_FOOT_LIFT;
@@ -218,7 +221,8 @@ export class MainShape {
       }
     }
     surface.follow(dt);
-    exciteCloth(surface, rows, luff, sideEff, FLUTTER, t, aws, this.env, this.leechEnv);
+    advancePhase(this.phase, FLUTTER, aws, dt);
+    exciteCloth(surface, rows, luff, sideEff, FLUTTER, this.phase, t, aws, this.env, this.leechEnv);
     if (this.colouring) writeState(surface, luff, rows.stall);
     surface.commit(this.colouring);
   }
@@ -242,6 +246,14 @@ export class MainShape {
       }
     }
     this.battensInit = true;
+  }
+
+  /** Forget all motion state: the next update snaps to the snapshot's shape (scenario change). */
+  reset(): void {
+    this.surface.reset();
+    this.sideField.reset();
+    this.luffF.reset();
+    this.battensInit = false;
   }
 
   dispose(): void { this.surface.dispose(); }

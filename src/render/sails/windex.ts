@@ -32,6 +32,7 @@ export class Windex {
 
   constructor() {
     this.group.name = 'windex';
+    this.vane.name = 'windex-vane';
     const steel = new THREE.MeshStandardMaterial({ color: 0xd9dde2, metalness: 1, roughness: 0.28 });
     const black = new THREE.MeshStandardMaterial({ color: 0x141619, metalness: 0, roughness: 0.45 });
     const reflector = new THREE.MeshStandardMaterial({ color: 0xff3a12, metalness: 0, roughness: 0.3, emissive: 0x3a0800 });
@@ -77,18 +78,27 @@ export class Windex {
 
   /** `awa`: apparent wind angle at the masthead (rad, + from starboard); `aws` in m/s. */
   update(dt: number, t: number, awa: number, aws: number): void {
-    const target = -awa;
+    // Non-finite input holds the vane where it is; a non-finite state re-seats it on the wind.
+    if (!Number.isFinite(this.angle + this.rate)) this.init = false;
+    const target = Number.isFinite(awa) ? -awa : this.init ? this.angle : 0;
     if (!this.init) { this.angle = target; this.rate = 0; this.init = true; }
-    const h = Math.min(Math.max(dt, 0), 1 / 30);
-    const w = 5 + 0.45 * Math.max(aws, 0);
+    const h = dt > 0 ? Math.min(dt, 1 / 30) : 0;
+    if (!(aws > 0)) aws = 0;
+    const w = 5 + 0.45 * aws;
     const zeta = 0.3;
     // Semi-implicit Euler on a wrapped error: stable for ω·dt < 1.
     this.rate += (w * w * wrapPi(target - this.angle) - 2 * zeta * w * this.rate) * h;
     this.angle = wrapPi(this.angle + this.rate * h);
-    const gust = Math.min(Math.max(aws, 0) / 10, 1.5);
+    const gust = Math.min(aws / 10, 1.5);
     const wobble = gust * (0.035 * Math.sin(2 * Math.PI * 1.7 * t) + 0.02 * Math.sin(2 * Math.PI * 3.3 * t + 1.1));
     this.vane.rotation.y = this.angle + wobble;
   }
+
+  /** Snap to the wind on the next update (scenario change). */
+  reset(): void { this.init = false; this.rate = 0; }
+
+  /** Current vane yaw about the rod (rad; −awa when settled). */
+  get vaneYaw(): number { return this.vane.rotation.y; }
 
   dispose(): void {
     for (const d of this.disposables) d.dispose();

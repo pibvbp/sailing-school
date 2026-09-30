@@ -51,6 +51,8 @@ export interface ClothMaterial {
   setLoad(load: number): void;
   /** Ribbon footprints from Telltales.writeFootprints (30 × vec4); ignored unless `ribbons` was set. */
   setRibbons(data: Float32Array): void;
+  /** Swap in new textures (quality change); the caller disposes the old ones. */
+  setTextures(tex: ClothTextures): void;
   dispose(): void;
 }
 
@@ -110,7 +112,7 @@ void RE_Direct_Cloth( const in IncidentLight directLight, const in vec3 geometry
 	RE_Direct_Physical( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
 	// Light on the far face diffuses through the cloth; a forward lobe glows where the source is behind it.
 	float back = saturate( - dot( geometryNormal, directLight.direction ) );
-	float fwd = pow( saturate( dot( - geometryViewDir, directLight.direction ) ), uFwdExp );
+	float fwd = pow( max( dot( - geometryViewDir, directLight.direction ), 1e-4 ), uFwdExp );
 	reflectedLight.directDiffuse += directLight.color * clothTrans * back * ( RECIPROCAL_PI + uFwdAmt * fwd );
 }
 #undef RE_Direct
@@ -138,7 +140,8 @@ float clothNoise( vec2 p ) {
 float clothCornerWrinkles( vec2 p, vec4 c ) {
 	vec2 d = p - c.xy;
 	float r = length( d );
-	if ( c.w <= 0.0 || r > c.z ) return 0.0;
+	// fade is 0 below 0.1 m anyway; returning early also keeps atan( 0, 0 ) out of the maths.
+	if ( c.w <= 0.0 || r > c.z || r < 0.1 ) return 0.0;
 	float a = atan( d.y, d.x );
 	float fan = sin( a * 24.0 + 1.8 * sin( a * 7.0 + r * 5.0 ) + r * 3.0 );
 	float fold = fan * fan * sign( fan );
@@ -174,7 +177,7 @@ float clothFoot = max( clothFw.x, clothFw.y );
 // Fibre density varies: backlit cloth is faintly mottled, never perfectly even.
 trans *= 0.88 + 0.16 * clothNoise( planP * 9.0 ) + 0.08 * clothNoise( planP * 27.0 );
 #ifdef CLOTH_NYLON
-	trans *= pow( clothBase.rgb, vec3( 1.35 ) ) * 1.5;
+	trans *= pow( max( clothBase.rgb, vec3( 1e-4 ) ), vec3( 1.35 ) ) * 1.5;
 	// Ripstop: heavier threads every 6 mm, visible up close and against the light.
 	{
 		vec2 g = abs( fract( planP / 0.006 ) - 0.5 ) * 0.006;
@@ -393,6 +396,11 @@ export function createClothMaterial(kind: ClothKind, tex: ClothTextures, detail:
       uniforms.uPressureOn.value = t ? 1 : 0;
     },
     setLoad(load) { uniforms.uLoad.value = Math.min(Math.max(load, 0), 1.5); },
+    setTextures(t) {
+      uniforms.uBase.value = t.base;
+      uniforms.uDecalFront.value = t.decalFront;
+      uniforms.uDecalBack.value = t.decalBack;
+    },
     setRibbons(data) {
       const v = uniforms.uRibbon.value;
       for (let i = 0; i < 30; i++) v[i]!.set(data[i * 4]!, data[i * 4 + 1]!, data[i * 4 + 2]!, data[i * 4 + 3]!);

@@ -109,6 +109,25 @@ describe('manoeuvres', () => {
   });
 });
 
+describe('spinnaker gybe', () => {
+  it('the pole goes end-for-end: its tip swings across the bow instead of jumping', () => {
+    const sim = crewSim({ wind: wind(12, 150), boat: { u: 3 }, spinnakerSet: true, controls: { helmMode: 'twa', helmTarget: 150 * DEG } });
+    run(sim, 20);
+    const side0 = Math.sign(sim.snapshot().sails.spinnaker.poleTip.y);
+    sim.controls.command = 'gybe';
+    let prev = sim.snapshot().sails.spinnaker.poleTip;
+    let maxStep = 0;
+    for (let i = 0; i < Math.round(25 / DT); i++) {
+      sim.step();
+      const tip = sim.snapshot().sails.spinnaker.poleTip;
+      maxStep = Math.max(maxStep, Math.hypot(tip.x - prev.x, tip.y - prev.y, tip.z - prev.z));
+      prev = tip;
+    }
+    expect(Math.sign(prev.y)).toBe(-side0); // the pole ended up on the new windward side
+    expect(maxStep).toBeLessThan(0.05); // never more than 5 cm in one 1/120 s step
+  });
+});
+
 describe('tacking in a breeze (I2)', () => {
   for (const tws of [18, 20, 22, 25]) {
     for (const gustiness of [0, 0.5]) {

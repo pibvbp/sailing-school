@@ -59,6 +59,10 @@ export class Telltales {
   private readonly col: Float32Array;
   private readonly geometry: THREE.BufferGeometry;
   private acc = 0;
+  /** Integrated ripple phase (cycles) and its value after each substep of the current frame. */
+  private ripple = 0;
+  private readonly ripplePhases = new Float64Array(3);
+  private readonly planTmp = { x: 0, y: 0 };
   private readonly root = new THREE.Vector3();
   private readonly n = new THREE.Vector3();
   private readonly tmp = new THREE.Vector3();
@@ -106,16 +110,23 @@ export class Telltales {
     this.ingest(sails.main.telltales, 'main', main);
     for (const r of this.ribbons.values()) r.active = r.seen && (r.sail === 'jib' ? jib.visible : main.visible);
 
-    this.acc = Math.min(this.acc + Math.max(dt, 0), 3 * SUB);
+    if (!(aws > 0)) aws = 0;
+    this.acc = Math.min(this.acc + (dt > 0 ? dt : 0), 3 * SUB);
     const steps = Math.floor(this.acc / SUB);
     this.acc -= steps * SUB;
+    // The ripple's frequency follows the wind, so its phase is integrated per substep (never f·t).
+    const rippleHz = 9 + 0.6 * Math.max(aws, 0);
+    for (let s = 0; s < steps; s++) this.ripplePhases[s] = this.ripple + rippleHz * SUB * (s + 1);
+    if (steps > 0) this.ripple = this.ripplePhases[steps - 1]!;
     let drawn = 0;
     for (const r of this.ribbons.values()) {
       if (!r.active || drawn >= MAX) continue;
       const sail = r.sail === 'jib' ? jib : main;
       this.attach(r, sail);
-      for (let s = 0; s < steps; s++) this.simulate(r, sail, t - (steps - 1 - s) * SUB, aws, gravity);
-      if (!r.started) this.simulate(r, sail, t, aws, gravity);
+      for (let s = 0; s < steps; s++) this.simulate(r, sail, t - (steps - 1 - s) * SUB, aws, gravity, this.ripplePhases[s]!);
+      if (!r.started) this.simulate(r, sail, t, aws, gravity, this.ripple);
+      // A bad frame (non-finite root or flow) must not freeze the ribbon for good: it re-forms.
+      if (!Number.isFinite(r.p[NODES * 3 - 1]! + r.flow.x + r.flow.y + r.flow.z)) { r.started = false; r.flow.set(0, 0, 0); }
       this.write(r, drawn, sail, t);
       if (r.slot >= 0) this.anchors[r.slot]!.position.copy(this.root);
       drawn++;
@@ -135,7 +146,7 @@ export class Telltales {
       }
       r.seen = true;
       r.state = tt.state;
-      r.intensity = tt.intensity;
+      r.intensity = Number.isFinite(tt.intensity) ? tt.intensity : 0;
       toLocal(tt.pos, this.tmp);
       if (this.tmp.distanceTo(r.mappedFrom) > 0.25) {
         r.mappedFrom.copy(this.tmp);
@@ -183,7 +194,7 @@ export class Telltales {
     return out.set(sail.rows.D[j]!, sail.rows.D[j + 1]!, sail.rows.D[j + 2]!);
   }
 
-  private simulate(r: Ribbon, sail: TelltaleSail, t: number, aws: number, gravity: THREE.Vector3): void {
+  private simulate(r: Ribbon, sail: TelltaleSail, t: number, aws: number, gravity: THREE.Vector3, ripple: number): void {
     const { p, q } = r;
     const seg = r.length / (NODES - 1);
     const sideSign = r.side === 'stbd' ? 1 : r.side === 'port' ? -1 : 0;
@@ -192,7 +203,8 @@ export class Telltales {
     const chord = this.rowDir(sail, r.v, this.dir);
     chord.addScaledVector(n, -chord.dot(n)).normalize();
     const up = this.up.set(0, 1, 0);
-    const speed = Math.max(1.5, 0.85 * aws);
+    // No floor: in a calm the flow dies away and gravity wins, so the ribbons hang.
+    const speed = 0.85 * Math.max(aws, 0);
     const k = r.intensity;
     const ph = r.seed * 40;
     // Target flow velocity for this state (boat-local, m/s).
@@ -222,7 +234,6 @@ export class Telltales {
     }
     // Smooth state changes (the flow does not switch instantly).
     r.flow.lerp(f, 0.12);
-    const flutterF = 9 + 0.6 * aws;
     const drag = 22;
     const gx = gravity.x * 9.81 * 0.4, gy = gravity.y * 9.81 * 0.4, gz = gravity.z * 9.81 * 0.4;
 
@@ -243,7 +254,7 @@ export class Telltales {
       const o = i * 3;
       const vx = (p[o]! - q[o]!) / SUB, vy = (p[o + 1]! - q[o + 1]!) / SUB, vz = (p[o + 2]! - q[o + 2]!) / SUB;
       // Streaming ribbons ripple: a travelling lateral wave in the flow they see.
-      const wave = r.state === 'streaming' ? 0.22 * speed * Math.sin(Math.PI * 2 * flutterF * t - 0.9 * i + ph) * (i / NODES) : 0;
+      const wave = r.state === 'streaming' ? 0.22 * speed * Math.sin(Math.PI * 2 * ripple - 0.9 * i + ph) * (i / NODES) : 0;
       const wx = r.flow.x + n.x * wave, wy = r.flow.y + n.y * wave, wz = r.flow.z + n.z * wave;
       const ax = gx + drag * (wx - vx), ay = gy + drag * (wy - vy), az = gz + drag * (wz - vz);
       q[o] = p[o]!; q[o + 1] = p[o + 1]!; q[o + 2] = p[o + 2]!;
@@ -310,13 +321,13 @@ export class Telltales {
    * five points (plan x, plan y, contact weight 0…1, side +1 stbd / −1 port); unused slots are zero.
    * The weight fades as the ribbon lifts off the cloth.
    */
-  writeFootprints(out: Float32Array, planAt: (u: number, v: number) => { x: number; y: number }): void {
+  writeFootprints(out: Float32Array, planAt: (u: number, v: number, out: { x: number; y: number }) => { x: number; y: number }): void {
     out.fill(0);
     let slot = 0;
     const up = this.up;
     for (const r of this.ribbons.values()) {
       if (!r.active || r.sail !== 'jib' || r.side === 'leech' || slot >= 6) continue;
-      const root = planAt(r.u, r.v);
+      const root = planAt(r.u, r.v, this.planTmp);
       up.crossVectors(r.nrm, r.chord).normalize(); // along the sail, toward the head
       if (up.y < 0) up.negate();
       const side = r.side === 'stbd' ? 1 : -1;
@@ -332,6 +343,13 @@ export class Telltales {
       }
       slot++;
     }
+  }
+
+  /** Drop every ribbon (scenario change): they re-form from the next snapshot. */
+  reset(): void {
+    this.ribbons.clear();
+    this.acc = 0;
+    this.geometry.setDrawRange(0, 0);
   }
 
   dispose(): void {

@@ -5,8 +5,8 @@ import * as THREE from 'three';
 import { BOAT } from '../../shared/boatSpec';
 import type { JibState, SailSection } from '../../sim/types';
 import {
-  RowFilter, SailRows, SailSurface, SideField, breathing, camberShape, exciteCloth, planFromRows, smooth, toLocal, writeState,
-  type FlutterParams, type SailPlan,
+  RowFilter, SailRows, SailSurface, SideField, advancePhase, breathing, camberShape, exciteCloth, planFromRows, smooth, toLocal,
+  writeState, type ClothPhase, type FlutterParams, type PlanPoint, type SailPlan,
 } from './sailMesh';
 
 const J = BOAT.jib;
@@ -55,6 +55,7 @@ export class JibFurlRoll {
   private lastFurl = -1;
   private readonly a = new THREE.Vector3();
   private readonly b = new THREE.Vector3();
+  private readonly c = new THREE.Vector3();
 
   constructor() {
     const n = this.rings * (this.segs + 1);
@@ -89,7 +90,7 @@ export class JibFurlRoll {
     axis.divideScalar(len);
     // Any vector ⟂ the axis, then a right-handed pair around it.
     const e1 = this.a.set(1, 0, 0).addScaledVector(axis, -axis.x).normalize();
-    const e2 = new THREE.Vector3().crossVectors(axis, e1);
+    const e2 = this.c.crossVectors(axis, e1);
     const foil = 0.016;
     for (let r = 0; r < this.rings; r++) {
       const v = r / (this.rings - 1);
@@ -128,6 +129,7 @@ export class JibShape {
   private readonly sideField: SideField;
   private readonly luffF: RowFilter;
   private uvFurl = 0;
+  private readonly phase: ClothPhase = { flog: 0, leech: 0 };
   private readonly tack = new THREE.Vector3();
   private readonly clew = new THREE.Vector3();
   private readonly head = new THREE.Vector3();
@@ -165,6 +167,8 @@ export class JibShape {
   }
 
   update(dt: number, t: number, s: JibState, aws: number): void {
+    dt = dt > 0 ? dt : 0; // NaN / negative → no step
+    aws = aws > 0 ? aws : 0;
     const { rows, surface } = this;
     toLocal(s.tack, this.tack);
     toLocal(s.clew, this.clew);
@@ -201,15 +205,23 @@ export class JibShape {
       }
     }
     surface.follow(dt);
-    exciteCloth(surface, rows, luff, side, FLUTTER, t, aws, this.env, this.leechEnv);
+    advancePhase(this.phase, FLUTTER, aws, dt);
+    exciteCloth(surface, rows, luff, side, FLUTTER, this.phase, t, aws, this.env, this.leechEnv);
     if (this.colouring) writeState(surface, luff, rows.stall);
     surface.commit(this.colouring);
   }
 
-  /** Plan position (texture layout) of grid point (u, v), allowing for the furled part of the sail. */
-  planAt(u: number, v: number): { x: number; y: number } {
+  /** Plan position (texture layout) of grid point (u, v) into `out`, allowing for the furled part of the sail. */
+  planAt(u: number, v: number, out: PlanPoint): PlanPoint {
     const f = Math.min(Math.max(this.uvFurl, 0), 0.97);
-    return this.plan.at(f + u * (1 - f), v);
+    return this.plan.atInto(f + u * (1 - f), v, out);
+  }
+
+  /** Forget all motion state: the next update snaps to the snapshot's shape (scenario change). */
+  reset(): void {
+    this.surface.reset();
+    this.sideField.reset();
+    this.luffF.reset();
   }
 
   dispose(): void {
