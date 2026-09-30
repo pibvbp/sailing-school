@@ -27,29 +27,32 @@ export interface SailAeroParams {
   cd0: number;
   kpp: number;
   cdFlog: number;
-  /** Separated-flow normal force: cnMax up to cnPeakAlpha, easing to cn90 at 90°. */
+  /** Separated-flow normal force: cnMax up to cnPeakAlpha, then decaying smoothly toward cn90. */
   cnMax: number;
   cnPeakAlpha: number;
   cn90: number;
+  /** Decay width (rad) of the normal force beyond its peak. */
+  cnDecay: number;
 }
 
 // Calibrated against the ORC VPP 2023 sail tables (see orc-envelope.test.ts).
 export const MAIN_AERO: SailAeroParams = {
   clSlope: 3.4, alpha0PerCamber: 1.15, alphaLuff0: 0.085, draftLuffGain: 0.25, luffWidth: 0.07,
   stallBase: 0.21, stallCamberGain: 0.8, stallWidth: 6 * DEG,
-  cd0: 0.022, kpp: 0.0138, cdFlog: 0.1, cnMax: 1.34, cnPeakAlpha: 0.6, cn90: 1.34,
+  cd0: 0.022, kpp: 0.0138, cdFlog: 0.1, cnMax: 1.34, cnPeakAlpha: 0.6, cn90: 1.34, cnDecay: 0.6,
 };
 
 export const JIB_AERO: SailAeroParams = {
   clSlope: 3.4, alpha0PerCamber: 1.15, alphaLuff0: 0.085, draftLuffGain: 0.25, luffWidth: 0.07,
   stallBase: 0.2, stallCamberGain: 0.8, stallWidth: 6 * DEG,
-  cd0: 0.025, kpp: 0.016, cdFlog: 0.1, cnMax: 0.95, cnPeakAlpha: 0.6, cn90: 0.95,
+  cd0: 0.025, kpp: 0.016, cdFlog: 0.1, cnMax: 0.95, cnPeakAlpha: 0.6, cn90: 0.9, cnDecay: 0.6,
 };
 
 export const SPIN_AERO: SailAeroParams = {
   clSlope: 2.0, alpha0PerCamber: 1.15, alphaLuff0: 0.12, draftLuffGain: 0.05, luffWidth: 0.11,
   stallBase: 0.02, stallCamberGain: 0.7, stallWidth: 0.2,
-  cd0: 0.06, kpp: 0.026, cdFlog: 0.15, cnMax: 1.15, cnPeakAlpha: 0.6, cn90: 0.64,
+  // Normal force peaks near 26° and decays toward a parachute's 0.64 — the values the ORC tables imply.
+  cd0: 0.06, kpp: 0.026, cdFlog: 0.15, cnMax: 1.05, cnPeakAlpha: 0.45, cn90: 0.64, cnDecay: 0.45,
 };
 
 export interface Coeffs {
@@ -72,7 +75,8 @@ export function alphaStall(p: SailAeroParams, camber: number, draft: number): nu
 function normalForce(p: SailAeroParams, alpha: number): number {
   const a = alpha <= Math.PI / 2 ? alpha : Math.PI - alpha;
   if (a <= p.cnPeakAlpha) return p.cnMax;
-  return p.cnMax + (p.cn90 - p.cnMax) * smoothstep(p.cnPeakAlpha, Math.PI / 2, a);
+  const x = (a - p.cnPeakAlpha) / p.cnDecay;
+  return p.cn90 + (p.cnMax - p.cn90) * Math.exp(-Math.pow(x, 1.5));
 }
 
 /** Section coefficients for an angle of attack α ∈ [0, π] measured between chord and flow. */

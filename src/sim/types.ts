@@ -85,7 +85,12 @@ export interface SailSection {
   camber: number;
   /** Position of maximum depth, fraction of chord. */
   draft: number;
-  /** Side the cloth bellies to: −1 port, +1 starboard (fractional while flipping). */
+  /**
+   * Belly side factor s ∈ [−1, 1]: the cloth bellies toward s · (chordDir.y, −chordDir.x, 0).
+   * For the main and jib (chord pointing aft) this is simply −1 = belly to port, +1 = belly to starboard;
+   * it passes through 0 while the sail flips during a tack/gybe. For the spinnaker (chord across the
+   * boat on a run) use the vector form.
+   */
   leewardY: number;
   /** Effective angle of attack (rad). */
   aoa: number;
