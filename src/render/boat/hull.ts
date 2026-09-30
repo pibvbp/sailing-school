@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { BOAT } from '../../shared/boatSpec';
 import type { BoatDetail, Part } from './materials';
 
+const MODULE_T0 = typeof performance !== 'undefined' ? performance.now() : 0;
 const H = BOAT.hull;
 export const X_TRANSOM = H.transomDeck.x;
 export const X_STEM = H.stemDeck.x;
@@ -238,7 +239,7 @@ function sectionBreadthAt(f: SectionFrame, h: number): number | null {
   if (h < f.kh || h > f.sh) return null;
   const p = { y: 0, h: 0 };
   let lo = 0, hi = Math.PI / 2;
-  for (let k = 0; k < 50; k++) {
+  for (let k = 0; k < 32; k++) {
     const mid = 0.5 * (lo + hi);
     sectionPoint(f, mid, p);
     if (p.h < h) lo = mid; else hi = mid;
@@ -249,9 +250,15 @@ function sectionBreadthAt(f: SectionFrame, h: number): number | null {
 
 /** Global bilge firmness chosen so the maximum waterline half-breadth is BWL/2. */
 export const BILGE_KAPPA = (() => {
+  // The widest waterline lies between x −1.6 and +0.6; a coarse scan finds it, then a fine one refines.
   const maxWL = (kappa: number) => {
-    let best = 0;
-    for (let x = -2.2; x <= 1.2; x += 0.02) {
+    let best = 0, bestX = -0.5;
+    for (let x = -1.6; x <= 0.6; x += 0.1) {
+      const f = sectionFrame(x, kappa);
+      const b = f ? sectionBreadthAt(f, 0) : null;
+      if (b !== null && b > best) { best = b; bestX = x; }
+    }
+    for (let x = bestX - 0.1; x <= bestX + 0.1; x += 0.02) {
       const f = sectionFrame(x, kappa);
       const b = f ? sectionBreadthAt(f, 0) : null;
       if (b !== null) best = Math.max(best, b);
@@ -259,12 +266,15 @@ export const BILGE_KAPPA = (() => {
     return best;
   };
   let lo = 0.2, hi = 4;
-  for (let k = 0; k < 40; k++) {
+  for (let k = 0; k < 26; k++) {
     const mid = 0.5 * (lo + hi);
     if (maxWL(mid) < H.bwl / 2) lo = mid; else hi = mid;
   }
   return 0.5 * (lo + hi);
 })();
+
+/** Time spent on the module-level design solves above (ms), reported in BoatModel.buildStats. */
+export const HULL_SOLVE_MS = typeof performance !== 'undefined' ? performance.now() - MODULE_T0 : 0;
 
 // ---------------------------------------------------------------------------------------------
 // Stations and the lofted shell.
@@ -436,29 +446,6 @@ export function buildHull(lines: HullLines): Part[] {
 
 // ---------------------------------------------------------------------------------------------
 // Queries used by the other builders.
-
-/** Half-breadth of the hull surface at station x and height h (interpolated between stations). */
-export function hullHalfBreadth(lines: HullLines, x: number, h: number): number {
-  const st = lines.stations;
-  let i = 0;
-  while (i < st.length - 2 && st[i + 1].x < x) i++;
-  const a = st[i], b = st[i + 1];
-  const t = Math.min(1, Math.max(0, (x - a.x) / Math.max(1e-9, b.x - a.x)));
-  return (1 - t) * breadthInSection(a, h) + t * breadthInSection(b, h);
-}
-
-function breadthInSection(s: HullStation, h: number): number {
-  const n = s.h.length;
-  if (h <= s.h[0]) return 0;
-  if (h >= s.h[n - 1]) return s.y[n - 1];
-  for (let j = 1; j < n; j++) {
-    if (s.h[j] >= h) {
-      const t = (h - s.h[j - 1]) / Math.max(1e-9, s.h[j] - s.h[j - 1]);
-      return s.y[j - 1] + (s.y[j] - s.y[j - 1]) * t;
-    }
-  }
-  return s.y[n - 1];
-}
 
 /** Outward unit normal (in the section plane, as y/h components) of the topsides just below the sheer. */
 export function topsideNormal(lines: HullLines, x: number): { ny: number; nh: number } {

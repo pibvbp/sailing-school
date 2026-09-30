@@ -264,7 +264,7 @@ export function deckPlanTextures(size: number, pads: PlanPt[][]): { map: THREE.C
 
   // Cockpit seats and sole.
   const seatIn = COCKPIT.footwellHalf + 0.05, seatOut = COCKPIT.halfWidth - 0.045;
-  const seatA = X_TRANSOM + 0.08, seatF = COCKPIT.xFwd - 0.06;
+  const seatA = COCKPIT.xSeatAft + 0.06, seatF = COCKPIT.xFwd - 0.06;
   for (const s of [1, -1]) {
     const [a, b] = s > 0 ? [seatIn, seatOut] : [-seatOut, -seatIn];
     mctx.beginPath(); path(mctx, roundedRect(seatA, a, -2.45, b, 0.03)); mctx.fill();
@@ -430,42 +430,49 @@ export function ropeBraidNormal(n = 64): THREE.DataTexture {
   return normalMapFromHeights(n, hgt, 2.2);
 }
 
-/** Rope colours (base, tracer) per atlas cell; see materials.ROPE. */
-const ROPE_COLOURS: Array<[string, string]> = [
-  ['#1d4fa8', '#f2f2ee'], // main sheet: blue, white fleck
-  ['#f0efea', '#c8202a'], // port jib sheet: white, red fleck
-  ['#f0efea', '#1f8a3c'], // starboard jib sheet: white, green fleck
-  ['#f06a14', '#1b1b1b'], // spinnaker sheets and guys: signal orange, black tracer
-  ['#f3f2ee', '#2a55b8'], // halyards: white, blue fleck
-  ['#34373b', '#d9c21e'], // control lines: charcoal, yellow fleck
-  ['#161718', '#e8e8e8'], // furling line, adjusters: black, white fleck
-  ['#a9adb0', '#5d6166'], // bare Dyneema: grey
-];
-
-/** Colour atlas: 8 cells across (one per rope colour), each one circumference × one braid repeat. */
-export function ropeAtlas(): THREE.CanvasTexture {
-  const cw = 64, ch = 128, cells = ROPE_COLOURS.length;
-  const [c, ctx] = canvas(cw * cells, ch);
-  const img = ctx.createImageData(cw * cells, ch);
-  const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  for (let k = 0; k < cells; k++) {
-    const base = rgb(ROPE_COLOURS[k][0]), tracer = rgb(ROPE_COLOURS[k][1]);
-    for (let y = 0; y < ch; y++) {
-      for (let x = 0; x < cw; x++) {
-        const b = braid(x / cw, y / ch);
-        const isTracer = b.family === 0 && (b.strand === 0 || b.strand === 4);
-        const col = isTracer ? tracer : base;
-        const shade = 0.5 + 0.5 * b.h + (hash(x + k * 97, y, 41) - 0.5) * 0.08;
-        const i = (y * cw * cells + k * cw + x) * 4;
-        img.data[i] = col[0] * shade; img.data[i + 1] = col[1] * shade; img.data[i + 2] = col[2] * shade; img.data[i + 3] = 255;
-      }
+/**
+ * Braided rope tile (u once round the rope, v one braid repeat along it): RGB = strand shading, A = the
+ * tracer mask (every fourth strand of one family). The rope material tints it per vertex with the rope's
+ * base and tracer colours, so the tile is colour-free and mips cleanly at any distance.
+ */
+export function ropeBraid(w = 64, h = 128): THREE.DataTexture {
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const b = braid(x / w, y / h);
+      const shade = 0.5 + 0.5 * b.h + (hash(x, y, 41) - 0.5) * 0.08;
+      const i = (y * w + x) * 4;
+      const v = Math.round(Math.min(1, shade) * 255);
+      data[i] = v; data[i + 1] = v; data[i + 2] = v;
+      data[i + 3] = b.family === 0 && (b.strand === 0 || b.strand === 4) ? 255 : 0;
     }
   }
-  ctx.putImageData(img, 0, 0);
-  const t = canvasTexture(c, true);
-  t.wrapS = THREE.ClampToEdgeWrapping;
-  t.wrapT = THREE.RepeatWrapping;
+  const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.anisotropy = 8;
+  t.needsUpdate = true;
   return t;
+}
+
+/**
+ * Foul-weather-gear fabric (tile ≈ one sleeve round): soft elongated folds plus a fine rip-stop weave,
+ * as a tangent-space normal map. Used on the crew where the per-vertex cloth weight is 1.
+ */
+export function clothNormal(n = 256): THREE.DataTexture {
+  const hgt = new Float32Array(n * n);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const folds = valueNoise(x / 42, y / 11, n / 42, 71) * 0.9 + valueNoise(x / 19, y / 7, n / 19, 72) * 0.45;
+      const weave = ((x >> 1) + (y >> 1)) & 1 ? 0.035 : 0;
+      const grid = (x % 16 === 0 || y % 16 === 0) ? 0.06 : 0;
+      hgt[y * n + x] = folds + weave + grid;
+    }
+  }
+  return normalMapFromHeights(n, hgt, 2.2);
 }
 
 /** Fine brushing streaks along u (brushed stainless). */

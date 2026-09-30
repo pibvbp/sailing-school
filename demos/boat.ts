@@ -1,12 +1,17 @@
 // Boat demo: the procedural Kestrel 25 at the waterline on a dark glossy stand-in sea.
 //   ?prod=1                        production renderer + SkySystem + Lighting + PostChain (AgX, auto-exposure)
 //                                  (default: the shared demo kit)
-//   ?view=side|bow|stern|deck|quarter|helm|cockpit|mastbase|bowclose|transom|keel|sailing   camera preset
+//   ?view=side|bow|stern|deck|quarter|helm|cockpit|mastbase|bowclose|transom|keel|sailing|sheets|pole|crew
 //   ?pose=rest|sail|spin           preset pose (rest: jib furled, boom centred)
 //   ?boom=deg&rudder=deg&heel=deg&crew=-1..1&furl=0..1&jib=deg   pose overrides
 //   ?hour=17  ?lift=m (raise the boat to inspect the keel)  ?tier=ultra|high|medium|low
 //   ?sails=1                       simple placeholder sails (demo only; the real sails are Task 13)
-//   ?helm=0                        hide the helmsman (as the helm camera would)
+//   ?helm=0                        hide the helmsman everywhere; ?helm=cam hides him for this camera only
+//                                  (camera.userData[BoatModel.HIDE_HELMSMAN], as the helm camera should)
+//   ?anim=tack|dither|hike         drive crewY/heel through repeated tacks (?period=s), a downwind dither
+//                                  around 0, or a breeze building to full hike and back; ?at=s runs it for
+//                                  s seconds at a fixed 60 Hz before the first frame and holds (stills)
+//   ?jiblead=-1..1&car=m           optional pose fields: jib-lead cars, traveller car (m, + stbd)
 //   ?ui=0                          hide the slider panel (for screenshots)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -34,7 +39,7 @@ const VIEWS: Record<string, { pos: [number, number, number]; target: [number, nu
   deck: { pos: [1.8, 6.2, 8.2], target: [0, 1.0, -0.8], fov: 45 },
   quarter: { pos: [9.5, 3.4, 9.5], target: [0, 2.9, -0.3], fov: 42 },
   sailing: { pos: [11, 2.2, -6.5], target: [0, 3.2, 0], fov: 44 },
-  helm: { pos: [0.95, 1.55, 2.55], target: [-0.1, 1.25, -3.2], fov: 62 },
+  helm: { pos: [0.95, 1.45, 2.3], target: [0.2, 1.2, -3.2], fov: 62 },
   cockpit: { pos: [0.35, 2.6, 5.6], target: [0, 0.55, 2.0], fov: 48 },
   mastbase: { pos: [1.0, 1.95, 0.6], target: [0, 1.25, -1.05], fov: 50 },
   bowclose: { pos: [1.6, 1.7, -6.0], target: [0, 1.0, -3.7], fov: 45 },
@@ -42,6 +47,7 @@ const VIEWS: Record<string, { pos: [number, number, number]; target: [number, nu
   keel: { pos: [7.5, 1.0, 1.5], target: [0, 0.4, 0.2], fov: 42 },
   sheets: { pos: [-3.2, 3.4, 4.8], target: [-0.3, 1.0, -0.6], fov: 50 },
   pole: { pos: [4.6, 3.2, 3.6], target: [0.6, 1.8, -1.6], fov: 50 },
+  crew: { pos: [-0.35, 1.95, 0.1], target: [0.75, 1.35, 1.5], fov: 45 },
 };
 const viewName = params.get('view') ?? 'quarter';
 const view = VIEWS[viewName] ?? VIEWS.quarter;
@@ -151,12 +157,14 @@ const env = prod ? prodEnv() : kitEnv();
 
 // --- Boat ------------------------------------------------------------------------------------------
 const t0 = performance.now();
-const boat = new BoatModel(quality);
+// No SailsView here, so the boat draws its own furled-jib roll (off by default in the app).
+const boat = new BoatModel(quality, { furledJib: true });
 const buildMs = performance.now() - t0;
 env.scene.add(boat.root);
 env.follow(boat.root);
 boat.root.position.y = num('lift', 0);
 if (params.get('helm') === '0') boat.setHelmVisible(false);
+if (params.get('helm') === 'cam') env.camera.userData[BoatModel.HIDE_HELMSMAN] = true;
 
 // --- Pose presets ------------------------------------------------------------------------------
 const preset = params.get('pose') ?? (viewName === 'sailing' ? 'sail' : 'rest');
@@ -197,6 +205,8 @@ pose.crewY = num('crew', pose.crewY);
 pose.jibFurl = num('furl', pose.jibFurl);
 jibAngle = num('jib', jibAngle / DEG) * DEG;
 pose.jibClew = clewFromAngle(jibAngle, pose.jibFurl);
+if (params.has('jiblead')) pose.jibLead = num('jiblead', 0);
+if (params.has('car')) pose.travelerCarY = num('car', 0);
 
 function applyPose(): void {
   boat.root.rotation.set(0, 0, -pose.heel, 'YXZ');
@@ -270,7 +280,37 @@ if (params.get('ui') !== '0') {
   document.body.appendChild(panel);
 }
 
-env.onFrame((dt) => boat.update(dt));
+// Animated crew checks: tacks (crewY lags the helm like the sim's auto-crew), downwind dither, hiking.
+const anim = params.get('anim');
+const period = num('period', 8);
+const holdAt = params.has('at') ? num('at', 0) : null;
+let clock = 0;
+function animate(dt: number): void {
+  clock += dt;
+  if (anim === 'tack') {
+    const u = (clock % period) / period;               // one tack each half period
+    const flip = (x: number) => Math.cos(Math.PI * THREE.MathUtils.smoothstep(x, 0.1, 0.1 + 1.6 / period));
+    const side = u < 0.5 ? flip(u) : -flip(u - 0.5);
+    pose.crewY = side;
+    pose.heel = -0.26 * side;
+    pose.boomAngle = 0.16 * side;
+    applyPose();
+  } else if (anim === 'dither') {
+    pose.crewY = 0.05 * Math.sin(clock * 2 * Math.PI * 0.9) + 0.02 * Math.sin(clock * 5.1);
+    pose.heel = 0.03 * Math.sin(clock * 1.3);
+    applyPose();
+  } else if (anim === 'hike') {
+    pose.crewY = 0.55 + 0.45 * Math.sin(clock * 2 * Math.PI / period);
+    pose.heel = -0.3 * pose.crewY;
+    applyPose();
+  }
+  boat.update(dt);
+}
+if (holdAt !== null) {
+  for (let t = 0; t < holdAt - 1e-9; t += 1 / 60) animate(1 / 60);
+  rebuildSails();
+}
+env.onFrame((dt) => (holdAt !== null ? boat.update(0) : animate(dt)));
 env.start();
 
 declare global { interface Window { __boat?: { buildStats: BoatModel['buildStats']; buildMs: number; triangles: () => number; breakdown: () => Record<string, number>; updateMs: () => number; gpuMs: () => Record<string, number> } } }

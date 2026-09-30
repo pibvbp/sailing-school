@@ -64,10 +64,11 @@ export interface RigBuild {
   staticParts: Part[];
   boomParts: Part[];
   poleParts: Part[];
-  /** Furled-jib roll around the foil at full size (scaled by the furl amount). */
-  furlGeometry: THREE.BufferGeometry;
-  furlBase: V3;
-  furlDir: V3;
+  /**
+   * Furled-jib roll around the foil at full size (scaled by the furl amount), built on demand: only views
+   * without SailsView (which owns the sail cloth, the roll included) draw it — see BoatOptions.furledJib.
+   */
+  furl(): { geometry: THREE.BufferGeometry; base: V3; dir: V3 };
 }
 
 export function buildRig(ctx: BuildContext): RigBuild {
@@ -136,7 +137,8 @@ export function buildRig(ctx: BuildContext): RigBuild {
     parts.push({ geometry: roundedBox(0.03, 0.06, 0.07, 0.008).applyMatrix4(frame(root.clone().add(v3(s * 0.008, 0, 0)), Y)), mat: 'darkMetal', shadow: true });
     const boot = new THREE.CapsuleGeometry(0.017, 0.07, 4, 10);
     boot.applyMatrix4(frame(tip.clone().add(tip.clone().sub(root).normalize().multiplyScalar(-0.015)), tip.clone().sub(root).normalize()));
-    parts.push({ geometry: boot, mat: 'lifeline', shadow: true });
+    // Tiny: no shadow (the 'lifeline' bucket must not become a caster — thin lines alias in the map).
+    parts.push({ geometry: boot, mat: 'lifeline', shadow: false });
   }
 
   // Standing rigging (1×19) with turnbuckles at the chainplates.
@@ -227,7 +229,7 @@ export function buildRig(ctx: BuildContext): RigBuild {
   boomParts.push(...block(0.04, frame(tb1, vDir, v3(1, 0, 0)), 2, 12, 'black'));
   for (let k = 0; k < 4; k++) {
     const dx = -0.012 + 0.008 * k;
-    boomParts.push({ geometry: tube([tb0.clone().add(v3(dx, 0, 0)).addScaledVector(vDir, 0.035), tb1.clone().add(v3(dx, 0, 0)).addScaledVector(vDir, -0.035)], { radius: 0.0028, radial: 5 }), mat: 'rope' });
+    boomParts.push({ geometry: ropeGeometry([tb0.clone().add(v3(dx, 0, 0)).addScaledVector(vDir, 0.035), tb1.clone().add(v3(dx, 0, 0)).addScaledVector(vDir, -0.035)], 0.0028, ROPE.control, 5), mat: 'rope' });
   }
   boomParts.push({ geometry: ropeGeometry([tb0.clone().add(v3(0.01, -0.03, 0)), tb0.clone().add(v3(0.02, -0.12, -0.05)), v3(0.05, baseY + 0.02, -0.08)], 0.0028, ROPE.control, 5), mat: 'rope' });
 
@@ -246,18 +248,18 @@ export function buildRig(ctx: BuildContext): RigBuild {
   }
   poleParts.push({ geometry: tube([v3(0, 0.034, PL * 0.35), v3(0, 0.06, PL * 0.5), v3(0, 0.034, PL * 0.65)], { radius: 0.0022, radial: 5 }), mat: 'wire' });
 
-  // Furled jib: roll of cloth (UV cover outside) around the foil, fattest low down.
-  const furlBase = onStay(fsT, fsH, RIG.drumTop + 0.1);
-  const furlTop = onStay(fsT, fsH, RIG.furlTop - 0.05);
-  const fl = furlBase.distanceTo(furlTop);
-  const fPath: V3[] = [];
-  for (let k = 0; k <= 16; k++) fPath.push(v3(0, 0, (fl * k) / 16));
-  const furlGeometry = tube(fPath, {
-    radius: (_i, s) => 0.014 + 0.036 * Math.pow(Math.max(0, 1 - s / fl), 1.3) * Math.min(1, (s / fl) * 14 + 0.3),
-    radial: 12, capStart: true, capEnd: true, vScale: 1,
-  });
-  return {
-    staticParts: parts, boomParts, poleParts,
-    furlGeometry, furlBase, furlDir: furlTop.clone().sub(furlBase).normalize(),
+  // Furled jib (optional): roll of cloth (UV cover outside) around the foil, fattest low down.
+  const furl = () => {
+    const base = onStay(fsT, fsH, RIG.drumTop + 0.1);
+    const top = onStay(fsT, fsH, RIG.furlTop - 0.05);
+    const fl = base.distanceTo(top);
+    const path: V3[] = [];
+    for (let k = 0; k <= 16; k++) path.push(v3(0, 0, (fl * k) / 16));
+    const geometry = tube(path, {
+      radius: (_i, s) => 0.014 + 0.036 * Math.pow(Math.max(0, 1 - s / fl), 1.3) * Math.min(1, (s / fl) * 14 + 0.3),
+      radial: 12, capStart: true, capEnd: true, vScale: 1,
+    });
+    return { geometry, base, dir: top.clone().sub(base).normalize() };
   };
+  return { staticParts: parts, boomParts, poleParts, furl };
 }

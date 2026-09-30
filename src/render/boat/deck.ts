@@ -147,7 +147,10 @@ export function topSurfaceH(x: number, y: number): number {
   const ay = Math.abs(y);
   if (ay > deckHalfBeam(x)) return -Infinity;
   if (x >= CAB.xAft && ay < cabinHalfWidth(x)) return cabinTopH(x, y);
-  if (x < COCKPIT.xFwd && ay < COCKPIT.halfWidth) return ay < COCKPIT.footwellHalf ? COCKPIT.soleH : COCKPIT.seatH;
+  if (x < COCKPIT.xFwd && ay < COCKPIT.halfWidth) {
+    if (ay < COCKPIT.footwellHalf) return COCKPIT.soleH;
+    return x < COCKPIT.xSeatAft ? deckH(x, COCKPIT.halfWidth) : COCKPIT.seatH;
+  }
   return deckH(x, y);
 }
 

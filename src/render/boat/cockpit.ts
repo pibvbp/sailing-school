@@ -11,15 +11,20 @@ import type { BuildContext, Part } from './materials';
 
 type V3 = THREE.Vector3;
 
-/** Cockpit cross-section at station x, port coaming top → sole → starboard coaming top, as (y, h). */
-function crossSection(x: number): V3[] {
+/**
+ * Cockpit cross-section at station x, port coaming top → sole → starboard coaming top, as (y, h).
+ * Aft of the seats (spec cockpit x −3.45) the seat level rises to small quarter decks either side of the
+ * open-transom walkway.
+ */
+function crossSection(x: number, quarterDeck: boolean): V3[] {
   const C = COCKPIT;
   const top = deckH(x, C.halfWidth);
+  const seat = quarterDeck ? top - 0.004 : C.seatH;
   const half = [
     v3(0, C.soleH, 0),
     v3(C.footwellHalf, C.soleH, 0),
-    v3(C.footwellHalf, C.seatH, 0),
-    v3(C.halfWidth, C.seatH, 0),
+    v3(C.footwellHalf, seat, 0),
+    v3(C.halfWidth, seat, 0),
     v3(C.halfWidth, top, 0),
   ];
   const full = [...half.slice(1).reverse().map((p) => v3(-p.x, p.y, 0)), ...half.slice(1)];
@@ -34,9 +39,12 @@ export function buildCockpit(ctx: BuildContext): Part[] {
   const C = COCKPIT;
   const n = Math.max(8, Math.round(26 * ctx.detail.deck));
   const rows: V3[][] = [];
+  // Quarter decks aft of the seats: two stations 5 mm apart make the seat end a vertical step.
+  rows.push(crossSection(X_TRANSOM, true).map((p) => loc(X_TRANSOM, p.x, p.y)));
+  rows.push(crossSection(C.xSeatAft - 0.0025, true).map((p) => loc(C.xSeatAft - 0.0025, p.x, p.y)));
   for (let i = 0; i <= n; i++) {
-    const x = X_TRANSOM + (C.xFwd - X_TRANSOM) * (i / n);
-    rows.push(crossSection(x).map((p) => loc(x, p.x, p.y)));
+    const x = C.xSeatAft + 0.0025 + (C.xFwd - C.xSeatAft - 0.0025) * (i / n);
+    rows.push(crossSection(x, false).map((p) => loc(x, p.x, p.y)));
   }
   // Sweep: rows along x (toward the bow), columns port → starboard; faces point into the well.
   const nc = rows[0].length;

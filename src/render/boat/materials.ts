@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import type { QualitySettings } from '../core/types';
 import type { HullLines } from './hull';
 import {
-  deckPlanTextures, fairnessNormal, hullPaintTextures, nameDecal, nonSkidNormal, ropeAtlas, ropeBraidNormal,
+  clothNormal, deckPlanTextures, fairnessNormal, hullPaintTextures, nameDecal, nonSkidNormal, ropeBraid, ropeBraidNormal,
   woodTexture, brushedNormal, furlTexture, type PlanPt,
 } from './textures';
 
@@ -138,19 +138,49 @@ export class BoatMaterials {
     }));
     this.mats.set('lifeline', new THREE.MeshStandardMaterial({ color: 0xeeeeea, roughness: 0.38, metalness: 0 }));
 
-    // All running rigging shares one braided atlas material; the colour cell is chosen by UV.
-    const atlas = keep(ropeAtlas());
-    const braid = keep(ropeBraidNormal());
-    braid.repeat.set(8, 1);
-    this.mats.set('rope', new THREE.MeshPhysicalMaterial({
-      map: atlas, normalMap: braid, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.78, metalness: 0,
+    // Running rigging: one braid tile tinted per vertex — base colour (`color`) and tracer fleck (`tracer`)
+    // mixed by the tile's tracer mask (its alpha).
+    const braidMap = keep(ropeBraid());
+    const braidBump = keep(ropeBraidNormal());
+    const rope = new THREE.MeshPhysicalMaterial({
+      vertexColors: true, map: braidMap, normalMap: braidBump, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.78, metalness: 0,
       sheen: 0.5, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xffffff),
-    }));
-    // Furled jib: the UV cover (acrylic canvas) is what shows outside the roll.
-    const furl = keep(furlTexture());
-    this.mats.set('furl', new THREE.MeshPhysicalMaterial({ map: furl, roughness: 0.84, metalness: 0, sheen: 0.5, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x8fa4b8) }));
-    // Crew: vertex-coloured foul-weather gear, skin and boots; a little sheen for the fabric.
-    this.mats.set('crew', new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.58, metalness: 0, sheen: 0.35, sheenRoughness: 0.45, sheenColor: new THREE.Color(0xffffff) }));
+    });
+    rope.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute vec3 tracer;\nvarying vec3 vTracer;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTracer = tracer;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vTracer;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+#ifdef USE_MAP
+  diffuseColor.rgb = mix( diffuseColor.rgb, vTracer * sampledDiffuseColor.rgb, sampledDiffuseColor.a );
+  diffuseColor.a = opacity;
+#endif`);
+    };
+    rope.customProgramCacheKey = () => 'kestrel-rope';
+    this.mats.set('rope', rope);
+    // Crew: vertex colours (with baked occlusion), per-vertex roughness and a fabric normal map gated by a
+    // per-vertex cloth weight (attribute `matp` = roughness, cloth) — skin, glasses and boots stay smooth.
+    const cloth = keep(clothNormal());
+    cloth.repeat.set(3, 2);
+    const crew = new THREE.MeshPhysicalMaterial({
+      vertexColors: true, roughness: 1, metalness: 0, normalMap: cloth, normalScale: new THREE.Vector2(0.55, 0.55),
+      sheen: 0.35, sheenRoughness: 0.45, sheenColor: new THREE.Color(0xffffff),
+    });
+    crew.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute vec2 matp;\nvarying vec2 vMatp;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMatp = matp;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec2 vMatp;')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vMatp.x;')
+        .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize( mix( nonPerturbedNormal, normal, vMatp.y ) );')
+        // Fabric sheen only on cloth, tinted by the cloth's own colour (a white sheen greys dark fabrics).
+        .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_SHEEN\nmaterial.sheenColor *= vMatp.y * min( vec3( 1.0 ), 0.25 + 1.5 * diffuseColor.rgb );\n#endif');
+    };
+    crew.customProgramCacheKey = () => 'kestrel-crew';
+    this.mats.set('crew', crew);
     const name = keep(nameDecal('KESTREL'));
     this.mats.set('decal', new THREE.MeshPhysicalMaterial({
       map: name, transparent: true, alphaTest: 0.02, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.04,
@@ -159,8 +189,17 @@ export class BoatMaterials {
   }
 
   get(key: MatKey): THREE.Material {
-    const m = this.mats.get(key);
+    const m = this.mats.get(key) ?? (key === 'furl' ? this.furlCover() : undefined);
     if (!m) throw new Error(`boat material ${key} missing`);
+    return m;
+  }
+
+  /** Furled jib (optional roll, see BoatOptions.furledJib): the UV cover (acrylic canvas) outside the roll. */
+  private furlCover(): THREE.Material {
+    const map = furlTexture();
+    this.textures.push(map);
+    const m = new THREE.MeshPhysicalMaterial({ map, roughness: 0.84, metalness: 0, sheen: 0.5, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x8fa4b8) });
+    this.mats.set('furl', m);
     return m;
   }
 

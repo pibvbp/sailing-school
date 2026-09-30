@@ -4,6 +4,7 @@
 // traveller with car, end stops and control lines, chainplates, rub rail, bow fitting.
 // The top of the file holds the small geometry primitives shared by the other builders.
 import * as THREE from 'three';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BOAT } from '../../shared/boatSpec';
 import { COCKPIT, cabinTopH, deckH } from './deck';
 import { X_STEM, X_TRANSOM, deckHalfBeam, sheerH, topsideNormal } from './hull';
@@ -43,7 +44,11 @@ export function roundedBox(w: number, h: number, d: number, r: number, segs = 2)
   g.rotateX(-Math.PI / 2);
   g.translate(0, -(h - 2 * bevel) / 2, 0);
   g.computeVertexNormals();
-  return g;
+  // ExtrudeGeometry is non-indexed; index it so merged buckets stay indexed (≈ 3× fewer vertices).
+  g.clearGroups();
+  const indexed = mergeVertices(g);
+  g.dispose();
+  return indexed;
 }
 
 /** Apply a matrix (position + normals). Returns the same geometry. */
@@ -53,11 +58,6 @@ export function place(g: THREE.BufferGeometry, pos: V3, rot?: THREE.Euler | THRE
   m.compose(pos, q, scale ?? new THREE.Vector3(1, 1, 1));
   g.applyMatrix4(m);
   return g;
-}
-
-/** Quaternion that turns local +Y onto `dir`. */
-export function alignY(dir: V3): THREE.Quaternion {
-  return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
 }
 
 /**
@@ -90,28 +90,6 @@ export function planarFace(
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   if (uv1) g.setAttribute('uv1', new THREE.BufferAttribute(uv1, 2));
   g.setIndex(index);
-  return g;
-}
-
-/** Structured grid (rows × cols of points) → indexed geometry; `flip` reverses the winding. */
-export function gridGeometry(rows: readonly (readonly V3[])[], flip: boolean, uvOf: (p: V3, i: number, j: number) => readonly [number, number]): THREE.BufferGeometry {
-  const nr = rows.length, nc = rows[0].length;
-  const pos = new Float32Array(nr * nc * 3), uv = new Float32Array(nr * nc * 2);
-  for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) {
-    const p = rows[i][j], v = i * nc + j;
-    pos.set([p.x, p.y, p.z], v * 3);
-    uv.set(uvOf(p, i, j), v * 2);
-  }
-  const index: number[] = [];
-  for (let i = 0; i < nr - 1; i++) for (let j = 0; j < nc - 1; j++) {
-    const a = i * nc + j, b = (i + 1) * nc + j, c = (i + 1) * nc + j + 1, d = i * nc + j + 1;
-    if (flip) index.push(a, c, b, a, d, c); else index.push(a, b, c, a, c, d);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  g.setIndex(index);
-  g.computeVertexNormals();
   return g;
 }
 
@@ -330,12 +308,16 @@ export function stanchionBase(m: THREE.Matrix4, seg: number): Part[] {
 export const onDeck = (x: number, y: number, lift = 0) => loc(x, y, deckH(x, y) + lift);
 
 export const HARDWARE = {
-  stanchionX: [2.1, 0.75, -0.6, -1.95],
+  // Stanchions clear of the chainplates, the guy blocks and the crew's hiking stations (crew.ts).
+  stanchionX: [2.1, 0.45, -0.72],
   stanchionInset: 0.055,
   lifelineH: 0.6,
-  primary: { x: -1.72, y: 0.99, r: 0.052, h: 0.2 },
-  secondary: { x: -2.9, y: 0.97, r: 0.042, h: 0.165 },
-  leadCarX: -0.1,
+  // Primaries between the helmsman and the main trimmer, secondaries clear of the pushpit legs.
+  primary: { x: -1.95, y: 0.99, r: 0.052, h: 0.2 },
+  secondary: { x: -3.12, y: 0.95, r: 0.042, h: 0.165 },
+  /** Jib-lead car x for jibLead −1 (aft) … +1 (forward); the sim's sheeting angle uses the same track. */
+  leadCarX: (jibLead = 0) => BOAT.jib.lead.xAft + (BOAT.jib.lead.xFwd - BOAT.jib.lead.xAft) * (Math.max(-1, Math.min(1, jibLead)) + 1) / 2,
+  furlCleat: { x: -1.3, y: 1.05 },
   capChainplate: { x: BOAT.chainplates.x, y: BOAT.chainplates.y },
   lowerChainplate: { x: 0.74, y: 1.12 },
   clutchX: -1.0,
@@ -352,9 +334,24 @@ export function stanchionTop(x: number, s: number): V3 {
   return onDeck(x, y, HARDWARE.lifelineH);
 }
 
-/** Where the jib sheet turns: the lead block on the car (side s). */
+/** Where the jib sheet turns: the lead block on the car (side s) for the car at mid-track. */
 export function jibLeadPoint(s: number): V3 {
-  return onDeck(HARDWARE.leadCarX, s * BOAT.jib.lead.y, 0.075);
+  return onDeck(HARDWARE.leadCarX(0), s * BOAT.jib.lead.y, 0.075);
+}
+
+/**
+ * Both jib-lead cars with their blocks, built for the car at mid-track: BoatModel moves this set along
+ * the tracks (local Z) for `BoatPose.jibLead`.
+ */
+export function leadCarParts(seg: number): Part[] {
+  const parts: Part[] = [];
+  for (const s of [-1, 1]) {
+    const car = onDeck(HARDWARE.leadCarX(0), s * BOAT.jib.lead.y, 0.012);
+    parts.push({ geometry: xf(roundedBox(0.034, 0.02, 0.075, 0.008), frame(car)), mat: 'darkMetal', shadow: true });
+    parts.push({ geometry: xf(cyl(0.004, 0.004, 0, 0.018, 8), frame(car.clone().add(v3(0, 0.005, 0.03)))), mat: 'black' });
+    parts.push(...block(0.05, frame(jibLeadPoint(s).add(v3(0, -0.005, 0)), Y, v3(0, 0, 1)), 1, seg));
+  }
+  return parts;
 }
 
 /** Primary winch drum (where the working jib sheet goes on). */
@@ -557,10 +554,6 @@ export function buildFittings(ctx: BuildContext): Part[] {
       mat: 'aluminium', shadow: true,
     });
     for (const e of [a, b]) parts.push({ geometry: xf(roundedBox(0.03, 0.02, 0.03, 0.006), frame(e.clone().add(v3(0, 0.006, 0)))), mat: 'black' });
-    const car = onDeck(HARDWARE.leadCarX, s * L.y, 0.012);
-    parts.push({ geometry: xf(roundedBox(0.034, 0.02, 0.075, 0.008), frame(car)), mat: 'darkMetal', shadow: true });
-    parts.push({ geometry: xf(cyl(0.004, 0.004, 0, 0.018, 8), frame(car.clone().add(v3(0, 0.005, 0.03)))), mat: 'black' });
-    parts.push(...block(0.05, frame(jibLeadPoint(s).add(v3(0, -0.005, 0)), Y, v3(0, 0, 1)), 1, seg));
     pads.push([[L.xFwd + 0.1, s * L.y - 0.035], [L.xAft - 0.1, s * L.y - 0.035], [L.xAft - 0.1, s * L.y + 0.035], [L.xFwd + 0.1, s * L.y + 0.035]]);
   }
 
@@ -633,7 +626,7 @@ export function buildFittings(ctx: BuildContext): Part[] {
   {
     const pts: V3[] = [loc(BOAT.jib.tack.x - 0.01, -0.03, sheerH(X_STEM) + 0.05)];
     for (const x of [...HARDWARE.stanchionX]) pts.push(onDeck(x, -(deckHalfBeam(x) - HARDWARE.stanchionInset - 0.03), 0.03));
-    const camX = -1.48, camY = -1.02;
+    const camX = HARDWARE.furlCleat.x, camY = -HARDWARE.furlCleat.y;
     pts.push(onDeck(camX + 0.06, camY, 0.02));
     parts.push({ geometry: ropeGeometry(smoothPath(pts, 70), 0.003, ROPE.black, 6), mat: 'rope' });
     parts.push(...camCleat(frame(onDeck(camX, camY, -0.002), Y, v3(0, 0, 1)), rad));

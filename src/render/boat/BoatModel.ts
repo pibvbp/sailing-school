@@ -1,22 +1,24 @@
 // The procedural Kestrel 25 (spec §6, §9.5): assembles hull, deck, cabin, cockpit, appendages, rig,
 // fittings, running rigging and crew in the boat-local frame (X starboard, Y up, Z aft; origin on the
 // centreline at the design waterline at the CG station). Static parts are merged per material;
-// the boom, rudder/tiller, spinnaker pole, sheets and crew are driven by setPose().
+// the boom, rudder/tiller, spinnaker pole, jib-lead cars, traveller car, sheets and crew are driven by
+// setPose() + update(). update() does no work when neither the pose nor the crew changed (e.g. paused)
+// and allocates nothing per frame.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BOAT } from '../../shared/boatSpec';
-import { bodyToLocal } from '../../shared/coords';
 import type { Vec3 } from '../../shared/math';
 import type { QualitySettings } from '../core/types';
 import { buildKeel, buildRudderBlade } from './appendages';
 import { buildCabin } from './cabin';
 import { buildCockpit } from './cockpit';
-import { CrewSet } from './crew';
+import { CrewSet, HIDE_HELMSMAN, type CrewInput } from './crew';
 import { COCKPIT, buildDeck, topSurfaceH } from './deck';
 import {
-  block, buildFittings, frame, guyBlock, jibLeadPoint, lathe, loc, primaryDrum, quarterBlock, roundedBox, secondaryDrum, v3,
+  HARDWARE, block, buildFittings, frame, guyBlock, jibLeadPoint, lathe, leadCarParts, loc, primaryDrum, quarterBlock,
+  roundedBox, secondaryDrum, v3,
 } from './fittings';
-import { buildHull, hullLines } from './hull';
+import { HULL_SOLVE_MS, buildHull, hullLines } from './hull';
 import { ROPE, RopeSet, rod, sagSpan, tube, type RopeSpec } from './lines';
 import { BoatMaterials, boatDetail, type BuildContext, type MatKey, type Part } from './materials';
 import { RIG, buildRig } from './rig';
@@ -38,11 +40,15 @@ export interface BoatPose {
   heel: number;
   /** Sheet trim 0 eased … 1 hard in: how straight the loaded sheets run (eased sheets sag a little). */
   sheets: { main: number; jib: number; spin: number };
+  /** Optional: jib-lead cars, −1 aft … +1 forward (`Controls.jibLead`). Default 0 = mid-track. */
+  jibLead?: number;
+  /** Optional: traveller car position (m, + to starboard: the sim's mainsail `carY`). Default: under the boom. */
+  travelerCarY?: number;
 }
 
 /** Merge geometries that share a material into one (drops attributes not present in all of them). */
 export function mergeParts(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  const names = ['position', 'normal', 'uv', 'uv1'].filter((n) => geos.every((g) => g.getAttribute(n)));
+  const names = ['position', 'normal', 'uv', 'uv1', 'color', 'tracer'].filter((n) => geos.every((g) => g.getAttribute(n)));
   for (const g of geos) for (const n of Object.keys(g.attributes)) if (!names.includes(n)) g.deleteAttribute(n);
   const input = geos.every((g) => g.index) ? geos : geos.map((g) => (g.index ? g.toNonIndexed() : g));
   const merged = mergeGeometries(input, false);
@@ -54,11 +60,39 @@ export function mergeParts(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
 
 // Animated rope slots.
 const R_MAIN = 0, R_MAIN_TAIL = 4, R_JIB_P = 5, R_JIB_S = 6, R_SPIN_SHEET = 7, R_SPIN_GUY = 8, R_LIFT = 9, R_FOREGUY = 10, R_TRAV_P = 11, R_TRAV_S = 12;
+const TRAVELLER_SLOTS: ReadonlyArray<readonly [number, number]> = [[R_TRAV_P, -1], [R_TRAV_S, 1]];
+const SIDES = [-1, 1] as const;
 
 const TR = BOAT.boom.traveler;
 const DEG = Math.PI / 180;
+const UP = new THREE.Vector3(0, 1, 0);
+const ZAXIS = new THREE.Vector3(0, 0, 1);
+const smooth = (a: number, b: number, x: number) => THREE.MathUtils.smoothstep(x, a, b);
+
+// Scratch.
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
+const _c = new THREE.Vector3();
+const _d = new THREE.Vector3();
+const _e = new THREE.Vector3();
+
+/** Body-frame point → boat-local, into `out` (same as shared/coords bodyToLocal, allocation-free). */
+function bodyInto(p: Vec3, out: THREE.Vector3): THREE.Vector3 {
+  return out.set(p.y, -p.z, -p.x);
+}
+
+export interface BoatOptions {
+  /**
+   * Draw a furled-jib roll on the foil (default false). SailsView owns the sail cloth, the furled roll
+   * included; this is only for views without it (e.g. the boat demo).
+   */
+  furledJib?: boolean;
+}
 
 export class BoatModel {
+  /** `camera.userData` key: cameras with this flag set to true do not draw the helmsman (helm/PiP views). */
+  static readonly HIDE_HELMSMAN = HIDE_HELMSMAN;
+
   readonly root = new THREE.Group();
   readonly anchors: {
     mastTop: THREE.Vector3;
@@ -68,28 +102,37 @@ export class BoatModel {
     boomEnd(angle: number): THREE.Vector3;
   };
 
-  /** Construction cost breakdown (ms): lofting + builders, procedural textures, merging. */
-  readonly buildStats = { geometryMs: 0, texturesMs: 0, mergeMs: 0 };
+  /** Construction cost (ms): module-level hull solve (once per app), lofting + builders, textures, assembly. */
+  readonly buildStats = { hullSolveMs: HULL_SOLVE_MS, geometryMs: 0, texturesMs: 0, mergeMs: 0 };
   private readonly materials: BoatMaterials;
   private readonly geometries: THREE.BufferGeometry[] = [];
   private readonly boom = new THREE.Group();
   private readonly rudder = new THREE.Group();
   private readonly pole = new THREE.Group();
   private readonly car = new THREE.Group();
-  private readonly furl: THREE.Mesh;
+  private readonly leadCars = new THREE.Group();
+  private readonly furl: THREE.Mesh | null = null;
   private readonly extension: THREE.Mesh;
   private readonly ropes: RopeSet;
   private readonly crew: CrewSet;
   private readonly pose: BoatPose;
-  private crewY = 0.5;
-  private dirty = true;
-  /** The first update places the crew directly; afterwards they move at a human pace (frozen when dt = 0). */
-  private crewPlaced = false;
-  // Scratch.
+  private ropesDirty = true;
+  // Per-side fixed points (index 0 port, 1 starboard) and other constants.
+  private readonly lead: [THREE.Vector3, THREE.Vector3];
+  private readonly drum: [THREE.Vector3, THREE.Vector3];
+  private readonly drum2: [THREE.Vector3, THREE.Vector3];
+  private readonly quarter: [THREE.Vector3, THREE.Vector3];
+  private readonly guy: [THREE.Vector3, THREE.Vector3];
+  private readonly bailLocal = RIG.sheetBail.clone().add(v3(0, -0.075, 0));
+  private readonly coilPoint = loc(TR.x - 0.35, 0.12, COCKPIT.soleH + 0.01);
+  private readonly camOut = new THREE.Vector3();
+  private readonly tillerEndPt = new THREE.Vector3();
+  private readonly crewInput: CrewInput = { crewY: 0, heel: 0, tillerEnd: this.tillerEndPt, mainsheetCam: this.camOut };
   private readonly g = new THREE.Vector3();
   private readonly pts: THREE.Vector3[];
+  private carX = 0;
 
-  constructor(q: QualitySettings) {
+  constructor(q: QualitySettings, opts: BoatOptions = {}) {
     const detail = boatDetail(q);
     this.root.name = 'Kestrel25';
     let t = performance.now();
@@ -125,14 +168,23 @@ export class BoatModel {
     this.pole.visible = false;
     this.root.add(this.pole);
 
-    // Furled jib roll (scaled radially by the furl amount).
-    this.furl = new THREE.Mesh(rig.furlGeometry, this.materials.get('furl'));
-    this.furl.position.copy(rig.furlBase);
-    this.furl.quaternion.setFromUnitVectors(v3(0, 0, 1), rig.furlDir);
-    this.furl.castShadow = true;
-    this.furl.receiveShadow = true;
-    this.geometries.push(rig.furlGeometry);
-    this.root.add(this.furl);
+    // Jib-lead cars (both sides move together along their tracks).
+    this.leadCars.name = 'jib-lead-cars';
+    this.addParts(this.leadCars, leadCarParts(detail.lathe));
+    this.root.add(this.leadCars);
+
+    // Optional furled-jib roll (scaled radially by the furl amount); normally SailsView draws it.
+    if (opts.furledJib) {
+      const roll = rig.furl();
+      this.furl = new THREE.Mesh(roll.geometry, this.materials.get('furl'));
+      this.furl.name = 'furled-jib';
+      this.furl.position.copy(roll.base);
+      this.furl.quaternion.setFromUnitVectors(ZAXIS, roll.dir);
+      this.furl.castShadow = true;
+      this.furl.receiveShadow = true;
+      this.geometries.push(roll.geometry);
+      this.root.add(this.furl);
+    }
 
     // Traveller car with the mainsheet's lower (fiddle + cam) block.
     this.car.name = 'traveller-car';
@@ -152,6 +204,7 @@ export class BoatModel {
     ]);
     this.geometries.push(ext);
     this.extension = new THREE.Mesh(ext, this.materials.get('carbon'));
+    this.extension.name = 'tiller-extension';
     this.extension.castShadow = true;
     this.extension.receiveShadow = true;
     this.root.add(this.extension);
@@ -161,7 +214,7 @@ export class BoatModel {
     const specs: RopeSpec[] = [
       { samples: 2, radius: 0.0045, cell: ROPE.mainSheet }, { samples: 2, radius: 0.0045, cell: ROPE.mainSheet },
       { samples: 2, radius: 0.0045, cell: ROPE.mainSheet }, { samples: 2, radius: 0.0045, cell: ROPE.mainSheet },
-      { samples: 14, radius: 0.0045, cell: ROPE.mainSheet },
+      { samples: 16, radius: 0.0045, cell: ROPE.mainSheet },
       { samples: n, radius: 0.0048, cell: ROPE.jibPort }, { samples: n, radius: 0.0048, cell: ROPE.jibStbd },
       { samples: n, radius: 0.0042, cell: ROPE.spinnaker }, { samples: n, radius: 0.0042, cell: ROPE.spinnaker },
       { samples: 2, radius: 0.003, cell: ROPE.control }, { samples: 2, radius: 0.003, cell: ROPE.control },
@@ -174,8 +227,13 @@ export class BoatModel {
     this.pts = Array.from({ length: Math.max(n, 16) }, () => new THREE.Vector3());
 
     this.crew = new CrewSet(detail);
-    this.crew.object.material = this.materials.get('crew');
-    this.root.add(this.crew.object);
+    for (const o of this.crew.objects) { o.material = this.materials.get('crew'); this.root.add(o); }
+
+    this.lead = [jibLeadPoint(-1).add(v3(0, 0.03, 0)), jibLeadPoint(1).add(v3(0, 0.03, 0))];
+    this.drum = [primaryDrum(-1), primaryDrum(1)];
+    this.drum2 = [secondaryDrum(-1), secondaryDrum(1)];
+    this.quarter = [quarterBlock(-1).add(v3(0, 0.03, 0)), quarterBlock(1).add(v3(0, 0.03, 0))];
+    this.guy = [guyBlock(-1).add(v3(0, 0.03, 0)), guyBlock(1).add(v3(0, 0.03, 0))];
 
     const gooseneck = RIG.gooseneck.clone();
     this.anchors = {
@@ -183,77 +241,93 @@ export class BoatModel {
       gooseneck,
       forestayTack: RIG.forestayTack.clone(),
       forestayHead: RIG.forestayHead.clone(),
-      boomEnd: (angle: number) => gooseneck.clone().add(v3(-Math.sin(angle) * BOAT.boom.length, 0, Math.cos(angle) * BOAT.boom.length)),
+      boomEnd: (angle: number) => this.boomEndInto(angle, new THREE.Vector3()),
     };
 
     this.buildStats.mergeMs = performance.now() - t;
     this.pose = {
       boomAngle: 0, rudder: 0, jibClew: { x: BOAT.jib.tack.x - 0.4, y: 0, z: -BOAT.jib.clewH }, jibFurl: 1,
       spin: { visible: false, poleAngle: 0, poleTipH: 2.2, tack: { x: 3, y: 0, z: -2 }, clew: { x: 0, y: 0, z: -2 } },
-      crewY: 0.5, heel: 0, sheets: { main: 0.5, jib: 0.5, spin: 0.5 },
+      crewY: 0.5, heel: 0, sheets: { main: 0.5, jib: 0.5, spin: 0.5 }, jibLead: 0, travelerCarY: undefined,
     };
     this.update(0);
+    // The first real pose places the crew directly rather than walking them over from this default.
+    this.crew.snap();
   }
 
-  /** Hide the helmsman (for a camera placed at his eyes); the tiller extension stays. */
+  /** Hide the helmsman in every view (see also BoatModel.HIDE_HELMSMAN for a per-camera switch). */
   setHelmVisible(visible: boolean): void {
     this.crew.helmVisible = visible;
-    this.dirty = true;
   }
 
-  /** Set the pose driven by the simulation (applied on the next update()). */
+  /** Put the crew straight at the current pose on the next update (scenario swaps, teleports). */
+  snapToPose(): void {
+    this.crew.snap();
+    this.ropesDirty = true;
+  }
+
+  /** Set the pose driven by the simulation; changes are applied by the next update(). */
   setPose(p: BoatPose): void {
     const q = this.pose;
+    const ps = p.spin, qs = q.spin;
+    const jibLead = p.jibLead ?? 0;
+    const changed = q.boomAngle !== p.boomAngle || q.rudder !== p.rudder || q.jibFurl !== p.jibFurl || q.heel !== p.heel
+      || q.crewY !== p.crewY || q.jibLead !== jibLead || q.travelerCarY !== p.travelerCarY
+      || !same(q.jibClew, p.jibClew) || qs.visible !== ps.visible || !same(qs.tack, ps.tack) || !same(qs.clew, ps.clew)
+      || q.sheets.main !== p.sheets.main || q.sheets.jib !== p.sheets.jib || q.sheets.spin !== p.sheets.spin;
+    if (!changed) return;
     q.boomAngle = p.boomAngle; q.rudder = p.rudder; q.jibFurl = p.jibFurl; q.crewY = p.crewY; q.heel = p.heel;
+    q.jibLead = jibLead; q.travelerCarY = p.travelerCarY;
     Object.assign(q.jibClew, p.jibClew);
-    const s = q.spin, ps = p.spin;
-    s.visible = ps.visible; s.poleAngle = ps.poleAngle; s.poleTipH = ps.poleTipH;
-    Object.assign(s.tack, ps.tack);
-    Object.assign(s.clew, ps.clew);
+    qs.visible = ps.visible; qs.poleAngle = ps.poleAngle; qs.poleTipH = ps.poleTipH;
+    Object.assign(qs.tack, ps.tack);
+    Object.assign(qs.clew, ps.clew);
     Object.assign(q.sheets, p.sheets);
-    this.dirty = true;
+    this.ropesDirty = true;
   }
 
+  /** Apply the pose and advance the crew by dt (0 = paused: the crew holds still). */
   update(dt: number): void {
     const p = this.pose;
-    // The crew moves at a human pace toward the requested side (a tack takes them ~1.5 s to cross).
-    const prevCrew = this.crewY;
-    const rate = this.crewPlaced ? 1 - Math.exp(-Math.max(0, dt) / 0.25) : 1;
-    this.crewPlaced = true;
-    this.crewY += (THREE.MathUtils.clamp(p.crewY, -1, 1) - this.crewY) * rate;
-    if (!this.dirty && Math.abs(this.crewY - prevCrew) < 1e-5) return;
-    this.dirty = false;
-
-    this.boom.rotation.y = -p.boomAngle;
-    this.rudder.rotation.y = p.rudder;
-    // Local "down" tilts with heel so slack lines hang toward the true vertical.
-    this.g.set(Math.sin(p.heel), -Math.cos(p.heel), 0);
-
-    // Furled roll.
-    const f = THREE.MathUtils.clamp(p.jibFurl, 0, 1);
-    this.furl.visible = f > 0.02;
-    this.furl.scale.set(0.25 + 0.75 * f, 0.25 + 0.75 * f, 1);
-
-    // Traveller car sits under the sheet, limited by the track.
-    const end = this.anchors.boomEnd(p.boomAngle);
-    const carX = THREE.MathUtils.clamp(end.x * 0.8, -TR.halfWidth + 0.06, TR.halfWidth - 0.06);
-    this.car.position.set(carX, COCKPIT.seatH + 0.012, -TR.x);
-
-    this.updateMainsheet(carX);
-    this.updateJibSheets();
-    this.updateSpinnaker();
-    this.updateTravellerLines(carX);
-
-    // Tiller end → helmsman's hand → extension.
-    const tillerEnd = this.tillerEnd();
-    const hand = this.crew.update(this.crewY, p.heel, tillerEnd);
-    const dir = hand.clone().sub(tillerEnd);
-    const len = Math.max(0.05, dir.length());
-    this.extension.position.copy(tillerEnd);
-    this.extension.quaternion.setFromUnitVectors(v3(0, 1, 0), dir.normalize());
-    this.extension.scale.set(1, len, 1);
-
-    this.ropes.commit();
+    const rigging = this.ropesDirty;
+    if (rigging) {
+      this.ropesDirty = false;
+      this.boom.rotation.y = -p.boomAngle;
+      this.rudder.rotation.y = p.rudder;
+      // Local "down" tilts with heel so slack lines hang toward the true vertical.
+      this.g.set(Math.sin(p.heel), -Math.cos(p.heel), 0);
+      if (this.furl) {
+        const f = THREE.MathUtils.clamp(p.jibFurl, 0, 1);
+        this.furl.visible = f > 0.02;
+        this.furl.scale.set(0.25 + 0.75 * f, 0.25 + 0.75 * f, 1);
+      }
+      this.leadCars.position.z = -(HARDWARE.leadCarX(p.jibLead ?? 0) - HARDWARE.leadCarX(0));
+      // Traveller car: the sim's car when given, else under the sheet; always within the track.
+      const lim = TR.halfWidth - 0.06;
+      const want = p.travelerCarY ?? this.boomEndInto(p.boomAngle, _a).x * 0.8;
+      this.carX = THREE.MathUtils.clamp(want, -lim, lim);
+      this.car.position.set(this.carX, COCKPIT.seatH + 0.012, -TR.x);
+      this.camOut.set(this.carX, COCKPIT.seatH + 0.075, -TR.x + 0.04);
+      this.updateMainsheet();
+      this.updateJibSheets();
+      this.updateSpinnaker();
+      this.updateTravellerLines();
+      this.tillerEndInto(this.tillerEndPt);
+    }
+    this.crewInput.crewY = p.crewY;
+    this.crewInput.heel = p.heel;
+    const crewMoved = this.crew.update(this.crewInput, dt);
+    if (crewMoved || rigging) {
+      // Extension from the tiller's universal joint to the helmsman's hand; the mainsheet tail runs
+      // through the main trimmer's hand when he holds it.
+      _a.subVectors(this.crew.helmGrip, this.tillerEndPt);
+      const len = Math.max(0.05, _a.length());
+      this.extension.position.copy(this.tillerEndPt);
+      this.extension.quaternion.setFromUnitVectors(UP, _a.multiplyScalar(1 / len));
+      this.extension.scale.set(1, len, 1);
+      this.updateMainsheetTail();
+      this.ropes.commit();
+    }
   }
 
   dispose(): void {
@@ -283,7 +357,7 @@ export class BoatModel {
       const mesh = new THREE.Mesh(geo, this.materials.get(mat));
       mesh.name = `boat-${mat}`;
       mesh.castShadow = b.shadow;
-      mesh.receiveShadow = mat !== 'glass' && mat !== 'decal';
+      mesh.receiveShadow = true;
       target.add(mesh);
     }
   }
@@ -292,10 +366,10 @@ export class BoatModel {
   private rudderParts(seg: number): Part[] {
     const T = BOAT.tiller;
     const parts: Part[] = [{ geometry: buildRudderBlade(), mat: 'antifouling', shadow: true }];
-    // Stock through the bearing, head fitting clamping the tiller.
+    // Stock above the bearing, head fitting clamping the tiller.
     parts.push({ geometry: rod(v3(0, T.headH - 0.1, 0), v3(0, T.headH + 0.03, 0), 0.03, 16), mat: 'polished', shadow: true });
     parts.push({ geometry: lathe([[0, 0], [0.042, 0], [0.042, 0.07], [0.034, 0.085], [0, 0.085]], seg).translate(0, T.headH - 0.05, 0), mat: 'brushed', shadow: true });
-    for (const s of [-1, 1]) parts.push({ geometry: roundedBox(0.008, 0.07, 0.16, 0.006).translate(s * 0.026, T.headH, -0.07), mat: 'brushed', shadow: true });
+    for (const s of SIDES) parts.push({ geometry: roundedBox(0.008, 0.07, 0.16, 0.006).translate(s * 0.026, T.headH, -0.07), mat: 'brushed', shadow: true });
     parts.push({ geometry: rod(v3(-0.035, T.headH + 0.01, -0.08), v3(0.035, T.headH + 0.01, -0.08), 0.005, 8), mat: 'polished' });
     // Laminated tiller: tapering rounded section, rising gently, with a grip end.
     const rise = 8 * DEG;
@@ -322,54 +396,70 @@ export class BoatModel {
 
   // --- animated rigging ------------------------------------------------------------------------------
 
-  private tillerEnd(): THREE.Vector3 {
+  private boomEndInto(angle: number, out: THREE.Vector3): THREE.Vector3 {
+    const L = BOAT.boom.length;
+    return out.set(-Math.sin(angle) * L, 0, Math.cos(angle) * L).add(RIG.gooseneck);
+  }
+
+  private tillerEndInto(out: THREE.Vector3): THREE.Vector3 {
     const T = BOAT.tiller;
     const rise = 8 * DEG;
-    const local = v3(0, T.headH + T.length * Math.sin(rise) + 0.05, -T.length * Math.cos(rise) + 0.03);
-    return local.applyAxisAngle(v3(0, 1, 0), this.pose.rudder).add(this.rudder.position);
+    return out.set(0, T.headH + T.length * Math.sin(rise) + 0.05, -T.length * Math.cos(rise) + 0.03)
+      .applyAxisAngle(UP, this.pose.rudder).add(this.rudder.position);
   }
 
-  private boomPoint(local: THREE.Vector3): THREE.Vector3 {
-    return local.clone().applyAxisAngle(v3(0, 1, 0), -this.pose.boomAngle).add(RIG.gooseneck);
+  /** A point in the boom group's frame → boat-local, into `out`. */
+  private boomPointInto(local: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+    return out.copy(local).applyAxisAngle(UP, -this.pose.boomAngle).add(RIG.gooseneck);
   }
 
-  private updateMainsheet(carX: number): void {
-    const upper = RIG.sheetBail.clone().add(v3(0, -0.075, 0));
-    const lower = v3(carX, COCKPIT.seatH + 0.012 + 0.1, -TR.x);
-    const axleBoom = v3(1, 0, 0).applyAxisAngle(v3(0, 1, 0), -this.pose.boomAngle);
+  private updateMainsheet(): void {
+    this.boomPointInto(this.bailLocal, _b);
+    _c.set(1, 0, 0).applyAxisAngle(UP, -this.pose.boomAngle);
     for (let k = 0; k < 4; k++) {
       const off = -0.013 + 0.0087 * k;
-      const a = this.boomPoint(upper).addScaledVector(axleBoom, off);
-      const b = lower.clone().add(v3(off * 0.9, 0, 0));
-      this.pts[0].copy(a); this.pts[1].copy(b);
+      this.pts[0].copy(_b).addScaledVector(_c, off);
+      this.pts[1].set(this.carX + off * 0.9, COCKPIT.seatH + 0.012 + 0.1, -TR.x);
       this.ropes.setPath(R_MAIN + k, this.pts);
     }
-    // Tail from the cam on the lower block, down into a loose coil on the sole.
-    const camOut = v3(carX, COCKPIT.seatH + 0.075, -TR.x + 0.04);
-    const coil = loc(TR.x - 0.35, 0.12, COCKPIT.soleH + 0.01);
+  }
+
+  /** Tail from the car's cam, through the main trimmer's hand when he holds it, into a coil on the sole. */
+  private updateMainsheetTail(): void {
     const n = this.ropes.specs[R_MAIN_TAIL].samples;
-    sagSpan(this.pts, 0, n, camOut, coil, 0.12 + 0.05 * (1 - this.pose.sheets.main), this.g);
+    const w = this.crew.sheetGrip;
+    const sag = 0.12 + 0.05 * (1 - this.pose.sheets.main);
+    if (w < 0.02) {
+      sagSpan(this.pts, 0, n, this.camOut, this.coilPoint, sag, this.g);
+    } else {
+      // Held: cam → hand (short, fairly straight) → a loop hanging from the hand down to the coil.
+      _d.lerpVectors(this.camOut, this.coilPoint, 0.35).lerp(this.crew.sheetHand, w);
+      const n1 = Math.round(n * 0.35);
+      sagSpan(this.pts, 0, n1, this.camOut, _d, 0.02, this.g);
+      sagSpan(this.pts, n1, n - n1, _d, this.coilPoint, sag * 1.4, this.g, false);
+    }
     for (let i = 0; i < n; i++) this.clampAbove(this.pts[i], 0.0045);
     this.ropes.setPath(R_MAIN_TAIL, this.pts);
   }
 
   private updateJibSheets(): void {
     const p = this.pose;
-    const clew = bodyToLocal(p.jibClew);
-    const c = v3(clew.x, clew.y, clew.z);
-    const working = Math.abs(c.x) > 0.04 ? Math.sign(c.x) : 1;
+    const c = bodyInto(p.jibClew, _a);
     const furled = THREE.MathUtils.clamp(p.jibFurl, 0, 1);
-    for (const s of [-1, 1]) {
+    const dz = this.leadCars.position.z;
+    for (let k = 0; k < 2; k++) {
+      const s = SIDES[k];
       const slot = s < 0 ? R_JIB_P : R_JIB_S;
       const n = this.ropes.specs[slot].samples;
-      const lead = jibLeadPoint(s).add(v3(0, 0.03, 0));
-      const drum = primaryDrum(s);
-      const loaded = s === working && furled < 0.8;
+      const lead = _b.copy(this.lead[k]).setZ(this.lead[k].z + dz);
+      // Load blends in as the clew moves over this side (no hard switch at the centreline).
+      const loaded = smooth(0.05, 0.4, c.x * s) * (1 - smooth(0.6, 0.9, furled));
       const span = c.distanceTo(lead);
-      const sag = loaded ? span * (0.004 + 0.02 * (1 - p.sheets.jib)) : span * (0.1 + 0.05 * furled);
+      const sagLoaded = span * (0.004 + 0.02 * (1 - p.sheets.jib));
+      const sagLazy = span * (0.1 + 0.05 * furled);
       const n1 = Math.round(n * 0.72);
-      sagSpan(this.pts, 0, n1, c, lead, sag, this.g);
-      sagSpan(this.pts, n1, n - n1, lead, drum, loaded ? 0.002 : 0.02, this.g, false);
+      sagSpan(this.pts, 0, n1, c, lead, sagLazy + (sagLoaded - sagLazy) * loaded, this.g);
+      sagSpan(this.pts, n1, n - n1, lead, this.drum[k], 0.02 + (0.002 - 0.02) * loaded, this.g, false);
       for (let i = 0; i < n; i++) this.clampAbove(this.pts[i], 0.005);
       this.ropes.setPath(slot, this.pts);
     }
@@ -379,40 +469,40 @@ export class BoatModel {
     const sp = this.pose.spin;
     this.pole.visible = sp.visible;
     if (!sp.visible) {
-      for (const k of [R_SPIN_SHEET, R_SPIN_GUY, R_LIFT, R_FOREGUY]) this.ropes.hide(k);
+      this.ropes.hide(R_SPIN_SHEET); this.ropes.hide(R_SPIN_GUY); this.ropes.hide(R_LIFT); this.ropes.hide(R_FOREGUY);
       return;
     }
-    const tackL = bodyToLocal(sp.tack), clewL = bodyToLocal(sp.clew);
-    const tack = v3(tackL.x, tackL.y, tackL.z), clew = v3(clewL.x, clewL.y, clewL.z);
+    const tack = bodyInto(sp.tack, _a), clew = bodyInto(sp.clew, _b);
     // Pole from the mast ring to the tack.
-    const dir = tack.clone().sub(RIG.poleInboard);
-    const len = dir.length();
-    this.pole.quaternion.setFromUnitVectors(v3(0, 0, 1), dir.clone().normalize());
+    const dir = _c.subVectors(tack, RIG.poleInboard);
+    const len = Math.max(1e-3, dir.length());
+    this.pole.quaternion.setFromUnitVectors(ZAXIS, _d.copy(dir).multiplyScalar(1 / len));
     this.pole.scale.set(1, 1, len / BOAT.spinnaker.poleLength);
-    const mid = RIG.poleInboard.clone().addScaledVector(dir, 0.5);
-    this.pts[0].copy(RIG.poleLiftMast); this.pts[1].copy(mid).add(v3(0, 0.06, 0));
+    _e.copy(RIG.poleInboard).addScaledVector(dir, 0.5);
+    this.pts[0].copy(RIG.poleLiftMast); this.pts[1].copy(_e).y += 0.06;
     this.ropes.setPath(R_LIFT, this.pts);
-    this.pts[0].copy(mid).add(v3(0, -0.03, 0)); this.pts[1].copy(RIG.foreguyDeck);
+    this.pts[0].copy(_e).y -= 0.03; this.pts[1].copy(RIG.foreguyDeck);
     this.ropes.setPath(R_FOREGUY, this.pts);
-    const windward = Math.sign(tack.x) || 1;
-    const lines: Array<[number, THREE.Vector3, THREE.Vector3, THREE.Vector3]> = [
-      [R_SPIN_SHEET, clew, quarterBlock(-windward).add(v3(0, 0.03, 0)), secondaryDrum(-windward)],
-      [R_SPIN_GUY, tack, guyBlock(windward).add(v3(0, 0.03, 0)), secondaryDrum(windward)],
-    ];
-    for (const [slot, from, via, to] of lines) {
-      const n = this.ropes.specs[slot].samples;
-      const n1 = Math.round(n * 0.7);
-      sagSpan(this.pts, 0, n1, from, via, from.distanceTo(via) * (0.006 + 0.02 * (1 - this.pose.sheets.spin)), this.g);
-      sagSpan(this.pts, n1, n - n1, via, to, 0.004, this.g, false);
-      for (let i = 0; i < n; i++) this.clampAbove(this.pts[i], 0.004);
-      this.ropes.setPath(slot, this.pts);
-    }
+    // Windward = the pole's side; with the pole on the centreline, the side away from the clew.
+    const windward = Math.sign(tack.x) || -Math.sign(clew.x) || 1;
+    const wi = windward > 0 ? 1 : 0, li = 1 - wi;
+    this.spinLine(R_SPIN_SHEET, clew, this.quarter[li], this.drum2[li]);
+    this.spinLine(R_SPIN_GUY, tack, this.guy[wi], this.drum2[wi]);
   }
 
-  private updateTravellerLines(carX: number): void {
+  private spinLine(slot: number, from: THREE.Vector3, via: THREE.Vector3, to: THREE.Vector3): void {
+    const n = this.ropes.specs[slot].samples;
+    const n1 = Math.round(n * 0.7);
+    sagSpan(this.pts, 0, n1, from, via, from.distanceTo(via) * (0.006 + 0.02 * (1 - this.pose.sheets.spin)), this.g);
+    sagSpan(this.pts, n1, n - n1, via, to, 0.004, this.g, false);
+    for (let i = 0; i < n; i++) this.clampAbove(this.pts[i], 0.004);
+    this.ropes.setPath(slot, this.pts);
+  }
+
+  private updateTravellerLines(): void {
     const h = COCKPIT.seatH + 0.028;
-    for (const [slot, s] of [[R_TRAV_P, -1], [R_TRAV_S, 1]] as const) {
-      this.pts[0].set(carX + s * 0.04, h, -TR.x + 0.012);
+    for (const [slot, s] of TRAVELLER_SLOTS) {
+      this.pts[0].set(this.carX + s * 0.04, h, -TR.x + 0.012);
       this.pts[1].set(s * (TR.halfWidth + 0.01), h - 0.006, -TR.x + 0.012);
       this.ropes.setPath(slot, this.pts);
     }
@@ -423,4 +513,8 @@ export class BoatModel {
     const h = topSurfaceH(-p.z, p.x);
     if (Number.isFinite(h) && p.y < h + r) p.y = h + r;
   }
+}
+
+function same(a: Vec3, b: Vec3): boolean {
+  return a.x === b.x && a.y === b.y && a.z === b.z;
 }

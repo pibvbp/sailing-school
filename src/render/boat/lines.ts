@@ -1,11 +1,12 @@
 // Linear things: tubes swept along paths (rails, wires, spars with custom sections) and ropes.
-// Ropes use one braided atlas material (materials.ROPE); a rope's colour is its atlas cell (UV u offset).
+// Ropes share one material: a tileable greyscale braid with a tracer mask, tinted per vertex with the
+// rope's base and tracer colours (no atlas, so distant mips cannot bleed one rope's colour into another).
 // RopeSet holds all animated ropes in one mesh and rewrites them in place (no allocation per frame).
 import * as THREE from 'three';
 
 type V3 = THREE.Vector3;
 
-/** Rope colour cells in the braided rope atlas (textures.ropeAtlas). */
+/** Rope colourways (index into ROPE_COLOURS). */
 export const ROPE = {
   mainSheet: 0,
   jibPort: 1,
@@ -16,7 +17,39 @@ export const ROPE = {
   black: 6,
   grey: 7,
 } as const;
-export const ROPE_CELLS = 8;
+
+/** Base and tracer (fleck) colour of each rope colourway, sRGB (spec §6 running-rigging colours). */
+export const ROPE_COLOURS: ReadonlyArray<readonly [number, number]> = [
+  [0x1d4fa8, 0xf2f2ee], // main sheet: blue, white fleck
+  [0xf0efea, 0xc8202a], // port jib sheet: white, red fleck
+  [0xf0efea, 0x1f8a3c], // starboard jib sheet: white, green fleck
+  [0xf06a14, 0x1b1b1b], // spinnaker sheets and guys: signal orange, black tracer
+  [0xf3f2ee, 0x2a55b8], // halyards: white, blue fleck
+  [0x34373b, 0xd9c21e], // control lines: charcoal, yellow fleck
+  [0x161718, 0xe8e8e8], // furling line, adjusters: black, white fleck
+  [0xa9adb0, 0x5d6166], // bare Dyneema: grey
+];
+
+const _col = new THREE.Color();
+/** Linear-space base and tracer colours of a colourway. */
+function ropeColours(cell: number): [number, number, number, number, number, number] {
+  const [base, tracer] = ROPE_COLOURS[cell] ?? ROPE_COLOURS[0];
+  _col.setHex(base, THREE.SRGBColorSpace);
+  const b = [_col.r, _col.g, _col.b];
+  _col.setHex(tracer, THREE.SRGBColorSpace);
+  return [b[0], b[1], b[2], _col.r, _col.g, _col.b];
+}
+
+/** Add the per-vertex `color` (base) and `tracer` attributes of a colourway to a rope geometry. */
+function tintRope(g: THREE.BufferGeometry, cell: number): THREE.BufferGeometry {
+  const n = g.getAttribute('position').count;
+  const [r, gg, b, tr, tg, tb] = ropeColours(cell);
+  const col = new Float32Array(n * 3), tra = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { col.set([r, gg, b], i * 3); tra.set([tr, tg, tb], i * 3); }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('tracer', new THREE.BufferAttribute(tra, 3));
+  return g;
+}
 
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
@@ -194,14 +227,12 @@ export function filletPath(pts: readonly V3[], r: number, segs: number): V3[] {
 
 // --- Ropes -----------------------------------------------------------------------------------------
 
-/** UV settings that select a rope colour cell and a braid pitch proportional to the diameter. */
-export function ropeUV(cell: number, radius: number): Pick<TubeOptions, 'uOffset' | 'uScale' | 'vScale'> {
-  return { uOffset: cell / ROPE_CELLS, uScale: 1 / ROPE_CELLS, vScale: 1 / (radius * 6) };
-}
+/** Braid pitch along a rope: one texture repeat per 6 radii (u wraps once round the rope). */
+const ropeVScale = (radius: number) => 1 / (radius * 6);
 
-/** Static rope along a smooth path. */
+/** Static rope along a smooth path, tinted with colourway `cell` (see ROPE). */
 export function ropeGeometry(path: readonly V3[], radius: number, cell: number, radial: number): THREE.BufferGeometry {
-  return tube(path, { radius, radial, capStart: true, capEnd: true, ...ropeUV(cell, radius) });
+  return tintRope(tube(path, { radius, radial, capStart: true, capEnd: true, vScale: ropeVScale(radius) }), cell);
 }
 
 /**
@@ -257,6 +288,15 @@ export class RopeSet {
     g.setAttribute('position', this.pos);
     g.setAttribute('normal', this.nor);
     g.setAttribute('uv', this.uv);
+    // Colours are fixed per rope.
+    const col = new Float32Array(verts * 3), tra = new Float32Array(verts * 3);
+    specs.forEach((sp, k) => {
+      const [r, gg, b, tr, tg, tb] = ropeColours(sp.cell);
+      const end = k + 1 < specs.length ? this.base[k + 1] : verts;
+      for (let i = this.base[k]; i < end; i++) { col.set([r, gg, b], i * 3); tra.set([tr, tg, tb], i * 3); }
+    });
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('tracer', new THREE.BufferAttribute(tra, 3));
     g.setIndex(index);
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 4, 0), 12);
     this.mesh = new THREE.Mesh(g, material);
@@ -274,7 +314,7 @@ export class RopeSet {
     rmFrames(pts, N, B, this.T, undefined, n);
     const ring = this.radial + 1;
     const p = this.pos.array as Float32Array, q = this.nor.array as Float32Array, uv = this.uv.array as Float32Array;
-    const u0 = sp.cell / ROPE_CELLS, us = 1 / ROPE_CELLS, vs = 1 / (sp.radius * 6);
+    const vs = ropeVScale(sp.radius);
     let s = 0;
     for (let i = 0; i < n; i++) {
       if (i > 0) s += pts[i].distanceTo(pts[i - 1]);
@@ -285,7 +325,7 @@ export class RopeSet {
         const v = this.base[k] + i * ring + j;
         p[v * 3] = pts[i].x + nx * sp.radius; p[v * 3 + 1] = pts[i].y + ny * sp.radius; p[v * 3 + 2] = pts[i].z + nz * sp.radius;
         q[v * 3] = nx; q[v * 3 + 1] = ny; q[v * 3 + 2] = nz;
-        uv[v * 2] = u0 + us * (j / this.radial);
+        uv[v * 2] = j / this.radial;
         uv[v * 2 + 1] = s * vs;
       }
     }

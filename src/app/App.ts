@@ -119,6 +119,8 @@ export class App implements AppApi {
   private readonly pitch: SpringState = { x: 0, v: 0 };
   private readonly roll: SpringState = { x: 0, v: 0 };
   private markIds: string[] = [];
+  /** A new scenario starts: place the crew and rig at the first pose instead of animating to it. */
+  private snapBoat = false;
   private lab: LabPanel | null = null;
   private labParams: LabParams = { ...LAB_DEFAULTS };
   /** Boat pose before the last physics step; rendering interpolates from it by the loop's alpha. */
@@ -160,6 +162,7 @@ export class App implements AppApi {
     this.post = new PostChain(this.renderer, this.scene, this.camera, this.quality);
     this.rig = new CameraRig(this.camera, canvas);
     this.tcam = new TelltaleCam(this.renderer);
+    this.tcam.camera.userData[BoatModel.HIDE_HELMSMAN] = true;
     // Browsers only start audio from a user gesture; the first click or key press arms it.
     this.soundscape.startOnFirstGesture();
 
@@ -220,6 +223,8 @@ export class App implements AppApi {
 
   setCamera(c: CameraKey): void {
     this.rig.setMode(c);
+    // At the helm the camera sits in the helmsman's head: hide him (his shadow stays).
+    this.camera.userData[BoatModel.HIDE_HELMSMAN] = c === 'helm';
     this.hud.syncState({ camera: c });
   }
 
@@ -272,6 +277,7 @@ export class App implements AppApi {
     this.loop.reset();
     this.syncPrevPose();
     this.sails.reset();
+    this.snapBoat = true;
     this.heave.x = this.heave.v = this.pitch.x = this.pitch.v = this.roll.x = this.roll.v = 0;
     this.applyOceanParams();
     this.hud.syncState({ wind: { ...this.sim.wind.settings } });
@@ -423,8 +429,14 @@ export class App implements AppApi {
       },
       crewY: snap.boat.crewHike,
       heel: snap.boat.heel,
+      jibLead: this.controls.jibLead,
+      travelerCarY: this.sim.main.carY,
       sheets: { main: this.controls.mainSheet, jib: this.controls.jibSheet, spin: this.controls.spinSheet },
     });
+    if (this.snapBoat) {
+      this.boat.snapToPose();
+      this.snapBoat = false;
+    }
     this.boat.update(dt * scale);
     this.sails.update(dt * scale, snap.t, sails, { awa: snap.wind.awa, aws: snap.wind.aws, awaDeck: snap.wind.awaDeck, awsDeck: snap.wind.awsDeck });
 

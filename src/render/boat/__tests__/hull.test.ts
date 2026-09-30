@@ -4,16 +4,14 @@ import { describe, expect, it } from 'vitest';
 import { BOAT } from '../../../shared/boatSpec';
 import { buildKeelGeometry, buildRudderBlade } from '../appendages';
 import { X_STEM, X_TRANSOM, buildHullGeometry, deckHalfBeam, hullLines, keelH, measureHull, sheerH } from '../hull';
+import { boatDetail } from '../materials';
 
 const H = BOAT.hull;
 const within = (value: number, target: number, tol = 0.02) => {
   expect(Math.abs(value - target) / Math.abs(target)).toBeLessThanOrEqual(tol);
 };
 
-describe.each([
-  ['high', { hullStations: 140, hullSectionPoints: 28 }],
-  ['low', { hullStations: 70, hullSectionPoints: 16 }],
-])('Kestrel 25 hull (%s detail)', (_tier, detail) => {
+describe.each((['ultra', 'high', 'medium', 'low'] as const).map((tier) => [tier, boatDetail({ tier })] as const))('Kestrel 25 hull (%s detail)', (_tier, detail) => {
   const geo = buildHullGeometry(hullLines(detail));
   const m = measureHull(geo);
 
