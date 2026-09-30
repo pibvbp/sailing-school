@@ -4,7 +4,7 @@ import type { SimSnapshot } from '../../sim/types';
 import type { LessonCtx } from '../types';
 import { absTwa, hasEvent, speedKn, twaDeg } from './readings';
 import { holdTwa } from './scenario';
-import { frameDt, type Demo } from './steps';
+import { frameDt, TimeWindow, type Demo } from './steps';
 
 // ---- detectors -------------------------------------------------------------------------------------
 
@@ -15,6 +15,9 @@ export interface TackResult { entry: number; min: number; ratio: number }
  * slowly into a tack still counts against it.
  */
 export const ENTRY_WINDOW = 8;
+/** The turn starts when the true wind angle drops below TURN_START and is over once it is back above TURN_CLEAR. */
+const TURN_START = 30;
+const TURN_CLEAR = 32;
 
 /**
  * Detects tacks however they are sailed (T key, autopilot or tiller): the bow turns through the wind from
@@ -24,38 +27,47 @@ export const ENTRY_WINDOW = 8;
  */
 export class TackWatch {
   private side: 0 | 1 | -1 = 0;
-  private recent: { t: number; v: number }[] = [];
+  private readonly recent = new TimeWindow(ENTRY_WINDOW);
   private entry = 0;
   private turning = false;
   private crossed = false;
   private crossT = 0;
   private min = Infinity;
 
+  /** Speed samples held for the entry speed (bounded: at most one per sim time step, 8 s long). */
+  get sampleCount(): number { return this.recent.size; }
+
   update(s: SimSnapshot): TackResult | null {
     const twa = twaDeg(s), a = Math.abs(twa), v = speedKn(s);
     const side: 1 | -1 = twa >= 0 ? 1 : -1;
-    if (a > 100) { this.turning = false; this.side = 0; this.recent = []; return null; }
+    if (a > 100) { this.turning = false; this.side = 0; this.recent.clear(); return null; }
     if (!this.turning) {
-      this.recent.push({ t: s.t, v });
-      while (this.recent.length > 1 && s.t - this.recent[0]!.t > ENTRY_WINDOW) this.recent.shift();
-      if (a >= 32 || this.side === 0) this.side = side;
-      if (a < 32) {
+      this.recent.add(s.t, v);
+      if (a >= TURN_CLEAR || this.side === 0) this.side = side;
+      if (a < TURN_START) {
         this.turning = true;
         this.crossed = false;
         this.min = v;
-        this.entry = Math.max(...this.recent.map((r) => r.v));
+        this.entry = this.recent.max();
       }
       return null;
     }
     this.min = Math.min(this.min, v);
     if (!this.crossed && side !== this.side) { this.crossed = true; this.crossT = s.t; }
-    if (a < 30) return null;
-    const done = (): void => { this.turning = false; this.side = side; this.recent = [{ t: s.t, v }]; };
-    if (!this.crossed || side === this.side) { done(); return null; } // turned back without tacking
+    if (a < TURN_CLEAR) return null;
+    if (!this.crossed || side === this.side) {
+      // Back on the old tack without going through the wind: not a tack, and the history still stands.
+      this.turning = false;
+      this.side = side;
+      return null;
+    }
     // On the new tack: wait until the boat accelerates again (or 5 s) so `min` is the real low point.
     if (v < this.min + 0.1 && s.t - this.crossT < 5) return null;
     const res = { entry: this.entry, min: this.min, ratio: this.entry > 0.1 ? this.min / this.entry : 0 };
-    done();
+    this.turning = false;
+    this.side = side;
+    this.recent.clear();
+    this.recent.add(s.t, v);
     return res;
   }
 }

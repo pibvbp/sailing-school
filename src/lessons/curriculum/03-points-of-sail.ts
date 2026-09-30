@@ -1,7 +1,7 @@
 // Lesson 3 — Points of sail (spec §11.2): the wheel overlay; close-hauled, beam reach, broad reach and run
 // with the crew trimming — and a comparison of the speeds the learner actually reached.
 import type { Lesson, LessonCtx, Step } from '../types';
-import { absTwa, downKey, fmt, holdTwa, mem, sailing, speedKn, step, upKey, view } from './helpers';
+import { absTwa, downKey, fmt, holdTwa, mem, sailing, speedKn, step, TimeWindow, upKey, view } from './helpers';
 
 type Point = 'closeHauled' | 'beam' | 'broad' | 'run';
 type Speeds = Partial<Record<Point, number>>;
@@ -31,11 +31,10 @@ function pointStep(p: PointDef): Step {
       label: `${p.action} (true wind angle ${p.lo}–${p.hi}°) for ${HOLD_S} s`,
       holdSeconds: HOLD_S,
       check: (c) => {
-        const samples = mem<{ t: number; v: number }[]>(c, 'samples', () => []);
-        if (!inRange(c) || speedKn(c.snap) < 2) { samples.length = 0; return false; }
-        samples.push({ t: c.t, v: speedKn(c.snap) });
-        while (samples.length > 1 && c.t - samples[0]!.t > SETTLED_S) samples.shift();
-        c.data['speeds'] = { ...speeds(c.data), [p.key]: samples.reduce((a, x) => a + x.v, 0) / samples.length };
+        const settled = mem(c, 'speed', () => new TimeWindow(SETTLED_S));
+        if (!inRange(c) || speedKn(c.snap) < 2) { settled.clear(); return false; }
+        settled.add(c.t, speedKn(c.snap));
+        c.data['speeds'] = { ...speeds(c.data), [p.key]: settled.mean() };
         return true;
       },
     },

@@ -54,7 +54,7 @@ export const findingTheWind: Lesson = {
     }),
     step({
       title: 'Bear away until the sails fill',
-      body: `<p>Pointing into the wind you are losing speed and will soon drift backwards. Choose a side and turn away from the wind — [[bearing-away|bear away]] — until the sails stop flapping and fill, and the boat speeds up again: <kbd>←</kbd> swings the bow to port, so the wind ends up on your starboard side; <kbd>→</kbd> the other way.</p>
+      body: `<p>Pointing into the wind you are losing speed and will soon drift backwards. Choose a side and turn away from the wind — [[bearing-away|bear away]] — until the sails stop flapping and fill, and the boat speeds up again. While she still has way on, <kbd>←</kbd> swings the bow to port, so the wind ends up on your starboard side, and <kbd>→</kbd> the other way; once she drifts backwards, steering is reversed.</p>
 <p>Left alone, a stopped boat does fall off by herself in the end — but slowly, drifting backwards, on whichever side the wind pushes her. A sailor chooses. The crew trims the sails for you as soon as they can draw.</p>`,
       camera: 'chase',
       overlays: view('wheel'),
@@ -78,7 +78,7 @@ export const findingTheWind: Lesson = {
         const s = c.snap;
         const a = absTwa(s);
         const chosen = peek<{ stbd: boolean; port: boolean }>(c, 'chosen');
-        if (!chosen?.stbd && !chosen?.port) return 'Choose a side and steer: hold ← to swing the bow to port (the wind ends up on your starboard side) or → for the other side.';
+        if (!chosen?.stbd && !chosen?.port) return 'Choose a side and steer while she still has way on: hold ← to swing the bow to port (the wind ends up on your starboard side) or → for the other side. Drifting backwards, the keys work the other way round.';
         if (a < 30 && speedKn(s) < 0.4) return 'You are stuck head to wind — [[in-irons]]. Switch on Back jib in the trim panel: the wind pushes the jib and swings the bow off. Lesson 12 covers this in detail.';
         if (a < 50) return `Keep turning away from the wind with ${downKey(s)} — the sails cannot fill inside the no-go zone.`;
         if (speedKn(s) < 2.5) return 'Good angle. Hold your course while the boat picks up speed.';

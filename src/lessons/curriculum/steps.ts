@@ -65,7 +65,10 @@ function learnerTookOver(prev: Seen, c: LessonCtx): boolean {
     if (now === was) continue;
     if (key === 'helmMode' || key === 'helmTarget') { if (!crewSteering) return true; continue; }
     if (key === 'tiller') {
-      if (!crewSteering && k.helmMode === 'manual' && Math.abs(now as number) > Math.abs(was as number) + 1e-6) return true;
+      // The tiller springs back toward centre by itself; moving it further over, or across to the other side
+      // (counter-steering), is the learner.
+      const n = now as number, w = was as number;
+      if (!crewSteering && k.helmMode === 'manual' && (Math.abs(n) > Math.abs(w) + 1e-6 || n * w < 0)) return true;
       continue;
     }
     if (MAIN.has(key)) { if (!k.autoTrim.main) return true; continue; }
@@ -87,9 +90,6 @@ function runDemo(c: LessonCtx, owner: object): void {
   slot.seen = look(c);
 }
 
-/** Whether a "Show me" demonstration of the current step is still running. */
-export const demoRunning = (c: LessonCtx): boolean => c.data[DEMO] !== undefined;
-
 /** Build a Step: fresh scratch state and no demo on entry; the demo, if any, runs from `tick`. */
 export function step(d: StepDef): Step {
   const owner = {};
@@ -108,7 +108,10 @@ export function step(d: StepDef): Step {
       d.onExit?.(c);
     },
     tick: (c) => {
+      const controls = c.app.controls;
       d.tick?.(c);
+      // The step's tick replaced the scenario: c.snap still shows the old boat, so no demo this frame.
+      if (c.app.controls !== controls) return;
       runDemo(c, owner);
     },
   };
@@ -157,6 +160,48 @@ export function latch(c: LessonCtx, key: string, cond: boolean): boolean {
   const box = mem(c, key, () => ({ on: false }));
   if (cond) box.on = true;
   return box.on;
+}
+
+/**
+ * Samples over a sliding window of simulated time. A sample is only recorded when time has moved on, so frames
+ * at a frozen time — a pause, or a display running faster than the sim — add nothing; time running backwards
+ * (a new scenario) starts the window afresh; and the buffer never holds more than `maxSamples`.
+ */
+export class TimeWindow {
+  private readonly ts: number[] = [];
+  private readonly xs: number[] = [];
+  constructor(readonly seconds: number, readonly maxSamples = 2048) {}
+
+  get size(): number { return this.ts.length; }
+
+  add(t: number, x: number): void {
+    const last = this.ts[this.ts.length - 1];
+    if (last !== undefined && t === last) return;
+    if (last !== undefined && t < last) this.clear();
+    this.ts.push(t);
+    this.xs.push(x);
+    let drop = 0;
+    while (drop < this.ts.length - 1 && t - this.ts[drop]! > this.seconds) drop++;
+    drop = Math.max(drop, this.ts.length - this.maxSamples);
+    if (drop > 0) { this.ts.splice(0, drop); this.xs.splice(0, drop); }
+  }
+
+  clear(): void { this.ts.length = 0; this.xs.length = 0; }
+
+  /** Mean of the samples in the window (NaN when empty). */
+  mean(): number {
+    if (this.xs.length === 0) return NaN;
+    let sum = 0;
+    for (const x of this.xs) sum += x;
+    return sum / this.xs.length;
+  }
+
+  /** Largest sample in the window (−Infinity when empty). */
+  max(): number {
+    let m = -Infinity;
+    for (const x of this.xs) if (x > m) m = x;
+    return m;
+  }
 }
 
 /** Simulated seconds since the previous call with this key during this step (0 on the first call). */

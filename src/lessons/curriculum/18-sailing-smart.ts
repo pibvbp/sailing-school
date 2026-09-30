@@ -154,9 +154,9 @@ export const sailingSmart: Lesson = {
     step({
       title: 'Gusts, lulls and shifts',
       body: `<p>Real wind is never steady. [[gust|Gusts]] come as darker patches on the water; in a gust the apparent wind moves aft and strengthens, so you can point a little higher — or [[depower]] if you are heeling too much. In a [[lull]], bear away a little to keep your speed up.</p>
-<p>The wind also swings from side to side. A [[lift-shift|lift]] lets you point closer to the mark; a [[header]] forces you away from it — and whatever heads you on one tack lifts you on the other. So tack on the headers. The [[layline|laylines]] are the two lines from the mark on which you can just fetch it: tack onto one too early and you must tack again; go past it and every metre beyond is wasted. Keep away from them until you are close to the mark — out there you can no longer use the shifts.</p>`,
+<p>The wind also swings from side to side. A [[lift-shift|lift]] lets you point closer to the mark; a [[header]] forces you away from it — and whatever heads you on one tack lifts you on the other. So tack on the headers. The [[layline|laylines]] are the two lines from the mark on which you can just fetch it: tack onto one too early and you must tack again; go past it and every metre beyond is wasted. Keep away from them until you are close to the mark — out there you can no longer use the shifts. You will see them drawn from the mark in the race.</p>`,
       camera: 'top',
-      overlays: view('wheel', 'laylines'),
+      overlays: view('wheel'),
       controls: ['helm'],
     }),
     step({
@@ -191,8 +191,8 @@ export const sailingSmart: Lesson = {
         const status = `${fmt(m.dist, 0)} m to the mark, ${fmt(left, 0)} s left${r.attempts > 1 ? ` (attempt ${r.attempts})` : ''}.`;
         if (s.maneuver === 'tack') return status;
         const beat = bestBeat(twsKn(s)).twa;
-        if (absTwa(s) > 70) return `${status} Head up to close-hauled with ${upKey(s)}.`;
         if (fetches(s, beat)) return `${status} You can fetch the mark on this tack — sail straight for it.`;
+        if (absTwa(s) > 70) return `${status} Head up to close-hauled with ${upKey(s)}.`;
         if (pastLayline(s, beat)) return `${status} You are past the layline: tack now (T) and sail for the mark.`;
         if (liftDeg(s) < -HEADER) return `${status} You are headed by ${fmt(-liftDeg(s), 0)}° — tack (T): the other tack is lifted.`;
         if (absTwa(s) > beat + 5) return `${status} You are sailing low; head up toward ${fmt(beat, 0)}°.`;

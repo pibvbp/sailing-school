@@ -17,10 +17,10 @@ export const OVERLAY_KEYS: readonly OverlayKey[] = [
   'windTriangle', 'forces', 'wheel', 'flow', 'flowSlice', 'aoa', 'xray', 'labels', 'laylines', 'track', 'telltaleCam',
 ];
 
-/** What the UI, the input controller and lessons may ask of the App. `controls` is read fresh every time. */
 /** A race mark placed by a lesson or mode (world metres east / north of the scenario origin). */
 export interface MarkSpec { id: string; e: number; n: number; kind: 'windward' | 'leeward' | 'start' }
 
+/** What the UI, the input controller and lessons may ask of the App. `controls` is read fresh every time. */
 export interface AppApi {
   setMode(m: AppMode): void;
   setCamera(c: CameraKey): void;

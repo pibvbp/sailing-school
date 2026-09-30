@@ -3,7 +3,10 @@
 // its budget. Split from curriculum.test.ts so the two suites run in parallel.
 import { describe, expect, it, vi } from 'vitest';
 import { CURRICULUM } from '../curriculum';
-import { PENDING_SIM_FIX, afterSkipping } from './curriculum-harness';
+import { PENDING_SIM_FIX, afterSkipping, idleWindow, showMeBudget } from './curriculum-harness';
+
+/** Wall-clock allowance for a test that simulates up to `simSeconds`, with room for a loaded CI machine. */
+const timeoutMs = (simSeconds: number): number => Math.max(60_000, 30_000 + 150 * simSeconds);
 
 describe('curriculum: after skipping the steps before it, a task still needs the learner and Show me still works', () => {
   for (const lesson of CURRICULUM) {
@@ -18,7 +21,7 @@ describe('curriculum: after skipping the steps before it, a task still needs the
         } finally {
           errors.mockRestore();
         }
-      }, 60_000);
+      }, timeoutMs(idleWindow(lesson, st) + showMeBudget(lesson, st)));
     });
   }
 });

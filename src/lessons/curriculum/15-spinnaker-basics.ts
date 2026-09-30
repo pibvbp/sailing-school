@@ -4,7 +4,8 @@
 import type { SimSnapshot } from '../../sim/types';
 import type { Lesson, LessonCtx } from '../types';
 import {
-  absAwa, absTwa, autoTrim, downKey, fmt, frameDt, holdTwa, kiteOf, mem, peek, poleError, sailing, step, upKey, view, type Demo,
+  absAwa, absTwa, autoTrim, downKey, fmt, frameDt, holdTwa, kiteOf, mem, peek, poleError, sailing, step, TimeWindow, upKey, view,
+  type Demo,
 } from './helpers';
 
 const POLE_TOLERANCE = 10;
@@ -17,12 +18,11 @@ const POLE_TOLERANCE = 10;
 const CURL_WINDOW_S = 10;
 const CURL_BAND: readonly [number, number] = [0.03, 0.6];
 
-/** Mean curl over the last CURL_WINDOW_S of this step (call once per frame, from the check). */
+/** Mean curl over the last CURL_WINDOW_S of this step (sampled on sim time, from the check). */
 function meanCurl(c: LessonCtx): number {
-  const samples = mem<{ t: number; curl: number }[]>(c, 'curl', () => []);
-  samples.push({ t: c.t, curl: kiteOf(c.snap).curl });
-  while (samples.length > 1 && c.t - samples[0]!.t > CURL_WINDOW_S) samples.shift();
-  const mean = samples.reduce((a, x) => a + x.curl, 0) / samples.length;
+  const window = mem(c, 'curl', () => new TimeWindow(CURL_WINDOW_S));
+  window.add(c.t, kiteOf(c.snap).curl);
+  const mean = window.mean();
   mem(c, 'curlMean', () => ({ v: mean })).v = mean;
   return mean;
 }
@@ -134,7 +134,7 @@ export const spinnakerBasics: Lesson = {
         holdSeconds: 30,
         check: (c) => {
           const a = absTwa(c.snap);
-          const edge = onTheEdge(c); // samples the curl every frame
+          const edge = onTheEdge(c); // samples the curl
           return a >= 120 && a <= 150 && edge;
         },
       },
