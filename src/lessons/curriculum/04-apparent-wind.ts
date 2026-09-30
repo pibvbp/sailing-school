@@ -1,7 +1,16 @@
 // Lesson 4 — Apparent wind (spec §11.2): the wind triangle; the apparent wind moves forward as you speed
 // up, is stronger upwind and weaker downwind.
-import type { Lesson } from '../types';
+import type { Lesson, LessonCtx } from '../types';
 import { absAwa, absTwa, autoTrim, awsKn, downKey, fmt, holdTwa, sailing, speedKn, step, trimOf, twsKn, upKey, view } from './helpers';
+
+/** The learner has trimmed the sails (or handed them to the crew) and both are drawing. */
+function sailsTrimmed(c: LessonCtx): boolean {
+  const k = c.app.controls;
+  const s = c.snap;
+  const main = k.autoTrim.main || k.mainSheet >= 0.25;
+  const jib = k.autoTrim.jib || k.jibSheet >= 0.1;
+  return main && jib && trimOf(s.sails.main).luffing <= 0.35 && trimOf(s.sails.jib).luffing <= 0.35;
+}
 
 export const apparentWind: Lesson = {
   id: 'apparent-wind',
@@ -34,16 +43,13 @@ export const apparentWind: Lesson = {
         check: (c) => {
           const s = c.snap;
           const a = absTwa(s);
-          return a >= 75 && a <= 105 && speedKn(s) >= 4.5 && a - absAwa(s) >= 20;
+          return sailsTrimmed(c) && a >= 75 && a <= 105 && speedKn(s) >= 4.5 && a - absAwa(s) >= 20;
         },
       },
       hint: (c) => {
         const s = c.snap;
-        const k = c.app.controls;
+        if (!sailsTrimmed(c)) return 'The sails are still let out — pull them in with W and ↑, or switch the crew’s Auto trim on.';
         if (speedKn(s) >= 4.5) return null;
-        const mainOut = !k.autoTrim.main && (k.mainSheet < 0.25 || trimOf(s.sails.main).luffing > 0.35);
-        const jibOut = !k.autoTrim.jib && k.jibSheet < 0.05;
-        if (mainOut || jibOut) return 'The sails are still let out — pull them in with W and ↑, or switch the crew’s Auto trim on.';
         return `${fmt(speedKn(s))} kn and accelerating. Watch the apparent wind angle (AWA) drop below the true one (TWA).`;
       },
       showMe: (c) => {
@@ -53,7 +59,7 @@ export const apparentWind: Lesson = {
     }),
     step({
       title: 'Stronger upwind',
-      body: `<p>Now turn toward the wind until you are close-hauled (<kbd>→</kbd> on this tack). Your boat wind now blows against the true wind at a steep angle, so the two add up: the apparent wind gets <strong>stronger</strong> and comes from further ahead.</p>
+      body: `<p>Now turn toward the wind until you are close-hauled (<kbd>→</kbd> on this tack). Your boat wind and the true wind now both come from ahead, only about 45° apart, so they add up: the apparent wind gets <strong>stronger</strong> and comes from further ahead.</p>
 <p>Compare the apparent wind speed (AWS) with the true wind speed (TWS) on the instruments — sailing upwind always feels windier than it really is.</p>`,
       camera: 'top',
       overlays: view('windTriangle'),

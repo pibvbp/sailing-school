@@ -1,7 +1,7 @@
 // Lesson 13 — Gybing (spec §11.2): controlled vs accidental gybe, the accidental one demonstrated safely.
 // Task: two gybes without a crash gybe event.
 import type { Lesson, LessonCtx } from '../types';
-import { absTwa, downKey, frameDt, GybeWatch, hasEvent, holdTwa, latch, mem, sailing, step, toDeg, twaDeg, view } from './helpers';
+import { absTwa, byTheLee, downKey, frameDt, GybeWatch, hasEvent, holdTwa, latch, mem, sailing, step, toDeg, view } from './helpers';
 
 const GYBES = 2;
 
@@ -38,9 +38,7 @@ export const gybing: Lesson = {
       hint: (c) => {
         const s = c.snap;
         const a = absTwa(s);
-        const boomSide = Math.sign(s.sails.main.boomAngle);
-        const byTheLee = boomSide !== 0 && Math.sign(twaDeg(s)) === -boomSide;
-        if (byTheLee) return 'You are by the lee — the wind is on the boom’s side. Hold on: the boom is about to go.';
+        if (byTheLee(s)) return 'You are by the lee — the wind is on the boom’s side. Hold on: the boom is about to go.';
         if (a < 165) return `Bear away further with ${downKey(s)}, past dead downwind.`;
         return `Keep turning with ${downKey(s)} until the wind comes from the boom’s side.`;
       },

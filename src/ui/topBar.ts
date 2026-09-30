@@ -52,7 +52,8 @@ export class TopBar {
       { value: 'lessons', label: 'Lessons', short: 'Learn', title: 'Guided lessons' },
       { value: 'free', label: 'Free sail', short: 'Free', title: 'Sail anywhere, every control' },
       { value: 'lab', label: 'Sail lab', short: 'Lab', title: 'Wind tunnel on the water: the boat is towed' },
-    ], (m) => hooks.setMode(m), 'sx-mode');
+    // Manual activation: arrowing across the modes must not switch mode (and end a lesson) on the way.
+    ], (m) => hooks.setMode(m), 'sx-mode', { followFocus: false });
 
     // Wind chip + popover.
     const windMain = h('span', 'sx-chip-main');
@@ -62,7 +63,7 @@ export class TopBar {
     const windBtn = h('button', { class: 'sx-chip', title: 'Wind settings', attrs: { type: 'button', 'aria-label': 'Wind settings' } }, [icon('wind', 16), windMain, windSub]);
     this.windCtl = new WindControls(hooks.setWind);
     this.windPop = new Popover(host, windBtn, h('div', 'sx-pop-body', [h('div', { class: 'sx-pop-title', text: 'Wind' }), this.windCtl.el]), 'Wind settings', 'center');
-    windBtn.addEventListener('click', () => this.windPop.toggle());
+    windBtn.addEventListener('click', (e) => this.windPop.toggle(Popover.fromKeyboard(e)));
 
     // Time chip + popover.
     const clock = h('span', 'sx-chip-main');
@@ -70,7 +71,7 @@ export class TopBar {
     const timeBtn = h('button', { class: 'sx-chip is-time', title: 'Time of day', attrs: { type: 'button', 'aria-label': 'Time of day' } }, [icon('sun', 16), clock]);
     this.timeCtl = new TimeControls(hooks.setHour);
     const timePop = new Popover(host, timeBtn, h('div', 'sx-pop-body', [h('div', { class: 'sx-pop-title', text: 'Light' }), this.timeCtl.el]), 'Time of day', 'center');
-    timeBtn.addEventListener('click', () => timePop.toggle());
+    timeBtn.addEventListener('click', (e) => timePop.toggle(Popover.fromKeyboard(e)));
 
     // Transport.
     this.pauseBtn = button('Pause', { icon: 'pause', iconOnly: true, class: 'sx-btn--icon', title: 'Pause (Space)', onClick: () => hooks.togglePause() });
@@ -81,9 +82,10 @@ export class TopBar {
     const qualityMain = h('span', 'sx-chip-main');
     this.qualityText = new TextSlot(qualityMain);
     const qualityBtn = h('button', { class: 'sx-chip is-quality', title: 'Graphics quality', attrs: { type: 'button', 'aria-label': 'Graphics quality' } }, [qualityMain, icon('chevronDown', 14)]);
-    this.qualitySeg = new Segmented('Graphics quality', QUALITY_ITEMS, (q) => { hooks.setQuality(q); this.qualityPop.close(); }, 'sx-seg--col');
+    // Arrows browse the tiers; Enter/Space commits and closes the popover.
+    this.qualitySeg = new Segmented('Graphics quality', QUALITY_ITEMS, (q) => { hooks.setQuality(q); this.qualityPop.close(); }, 'sx-seg--col', { followFocus: false });
     this.qualityPop = new Popover(host, qualityBtn, h('div', 'sx-pop-body', [h('div', { class: 'sx-pop-title', text: 'Graphics quality' }), this.qualitySeg.el]), 'Graphics quality', 'end');
-    qualityBtn.addEventListener('click', () => this.qualityPop.toggle());
+    qualityBtn.addEventListener('click', (e) => this.qualityPop.toggle(Popover.fromKeyboard(e)));
     this.fsBtn = button('Fullscreen', { icon: 'fullscreen', iconOnly: true, class: 'sx-btn--icon', title: 'Fullscreen', onClick: hooks.toggleFullscreen });
     if (typeof document !== 'undefined' && !document.fullscreenEnabled) this.fsBtn.hidden = true;
     document.addEventListener('fullscreenchange', this.onFullscreen);

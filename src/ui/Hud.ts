@@ -80,7 +80,7 @@ export class Hud {
   private readonly pill: HTMLElement;
   private readonly pillText: TextSlot;
   private readonly nav: HTMLElement;
-  private readonly tips: { hide(): void; dispose(): void };
+  private readonly tips: { hide(): boolean; dispose(): void };
   private readonly navButtons = new Map<Sheet, HTMLButtonElement>();
   private readonly textGate = new RateGate(15);
   private readonly compactMq: MediaQueryList | null;
@@ -358,7 +358,8 @@ export class Hud {
         this.help.toggle();
       },
       escape: () => {
-        this.tips.hide();
+        // Esc closes one thing at a time: a definition card first, then a popover, a dialog, a sheet — else the menu.
+        if (this.tips.hide()) return;
         if (Popover.closeAll()) return;
         if (this.help.open) { this.help.close(); return; }
         if (this.settings.modal.open) { this.settings.modal.close(); return; }

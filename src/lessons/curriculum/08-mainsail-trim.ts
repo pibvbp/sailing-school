@@ -93,10 +93,10 @@ export const mainsailTrim: Lesson = {
         const top = (mem(c, 'top', () => ({ ema: NaN })).ema);
         if (anyFluttering(s)) return 'The top of the sail is still luffing — sheet in with W to firm up the leech.';
         if (bottomStreaming(s) < 0.3) return c.app.controls.mainSheet < 0.9
-          ? 'The lower telltales are stalled: the sail is too far in. Sheet in fully with W for a firm leech, then drop the traveler with Z.'
-          : 'The lower telltales are stalled: drop the traveler a little with Z.';
-        if (top > 0.75) return 'The top telltale streams all the time: raise the traveler a little with Q (or sheet in with W).';
-        if (top < 0.25) return 'The top telltale is stalled most of the time: drop the traveler a little with Z.';
+          ? 'The bottom of the sail is stalled: the boom is too close to the centreline. Firm up the leech with the mainsheet (W), then drop the traveler with Z.'
+          : 'The bottom of the sail is stalled: the boom is too close to the centreline. Keep the sheet firm and drop the traveler a little with Z.';
+        if (top > 0.75) return 'The top telltale streams all the time: raise the traveler a little with Q. (Sheeting harder with W also closes the top — the mainsheet sets the twist.)';
+        if (top < 0.25) return 'The top telltale is stalled most of the time: drop the traveler a little with Z — or ease the mainsheet a touch with S to add twist.';
         return `Close — apparent wind ${fmt(Math.abs(awaDeg(s)), 0)}°. Hold it steady.`;
       },
       showMe: (c) => {

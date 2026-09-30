@@ -17,19 +17,19 @@ export interface ToastSpec {
 }
 
 /**
- * Event → toast. Lesson ids follow the curriculum file names of Task 18 (`01-meet-the-boat.ts` → 'meet-the-boat');
- * the Hud hides a link whose lesson does not exist, and `Hud.setEventLessons` can remap them.
+ * Event → toast. Lesson ids are the curriculum's (`src/lessons/curriculum/*`); the Hud hides a link whose lesson
+ * does not exist, and `Hud.setEventLessons` can remap them.
  */
 export const EVENT_TOASTS: Partial<Record<SimEventType, ToastSpec>> = {
   crashGybe: { title: 'Accidental gybe!', msg: 'The wind got behind the mainsail and slammed the [[boom]] across. Steer less deep, or sheet in before you [[gybe]].', kind: 'warn', lessonId: 'gybing', cooldown: 6 },
-  inIrons: { title: 'In irons', msg: 'Pointing into the wind the sails cannot fill. Back the jib and steer away until they draw.', kind: 'warn', lessonId: 'getting-out-of-irons', cooldown: 15 },
-  spinCollapse: { title: 'Spinnaker collapsed', msg: 'Its [[luff]] folded in: trim the spinnaker sheet a little, or bear away.', kind: 'warn', lessonId: 'spinnaker-reaching', cooldown: 8 },
+  inIrons: { title: 'In irons', msg: 'Pointing into the wind the sails cannot fill. Back the jib and steer away until they draw.', kind: 'warn', lessonId: 'out-of-irons', cooldown: 15 },
+  spinCollapse: { title: 'Spinnaker collapsed', msg: 'Its [[luff]] folded in: trim the spinnaker sheet a little, or bear away.', kind: 'warn', lessonId: 'spinnaker-reaching-running', cooldown: 8 },
   roundUp: { title: 'Round-up', msg: 'Too much [[heel]]: the rudder lost its grip and the boat spun into the wind. Ease the main to depower.', kind: 'warn', lessonId: 'keel-and-balance', cooldown: 10 },
   luffing: { title: 'Luffing', msg: 'The sails are flapping — the wind meets them too head-on. [[trim|Trim]] in, or bear away.', kind: 'info', lessonId: 'jib-telltales', cooldown: 30 },
   backwinded: { title: 'Backwinded main', msg: 'The jib is over-trimmed and blows into the back of the main. Ease the jib a little.', kind: 'info', lessonId: 'main-and-jib', cooldown: 20 },
-  tackComplete: { title: 'Tack complete', msg: '', kind: 'good', cooldown: 2 },
-  gybeComplete: { title: 'Gybe complete', msg: '', kind: 'good', cooldown: 2 },
-  spinRefill: { title: 'Spinnaker full again', msg: '', kind: 'good', cooldown: 5 },
+  tackComplete: { title: 'Tack complete', msg: '', kind: 'good', lessonId: 'tacking', cooldown: 2 },
+  gybeComplete: { title: 'Gybe complete', msg: '', kind: 'good', lessonId: 'gybing', cooldown: 2 },
+  spinRefill: { title: 'Spinnaker full again', msg: '', kind: 'good', lessonId: 'spinnaker-basics', cooldown: 5 },
 };
 
 const KIND_ICON: Record<ToastKind, IconName> = { warn: 'wind', info: 'bulb', good: 'check' };

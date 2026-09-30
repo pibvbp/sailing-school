@@ -1,144 +1,27 @@
 // Curriculum tests (spec §11, Task 18). Every lesson runs in the real lessons engine against the real
 // simulation and auto-crew (no rendering), the way a learner meets it:
-//  • setup, and every step's onEnter / check / hint, run without throwing (the engine reports errors via console);
-//  • a task step is never completed by a learner who does nothing for 5 s;
-//  • pressing "Show me" completes every task step (holdSeconds included) within 90 s of simulated time —
-//    proof that each task is achievable in the actual physics.
-// Plus static checks: ids, order, texts, glossary references, controls/cameras/overlays, quizzes.
+//  • setup, and every step's onEnter / tick / check / hint, run without throwing (the engine reports errors via
+//    console);
+//  • a learner who does nothing never completes a task: idle for at least 60 s (longer for long tasks, below);
+//  • pressing "Show me" then completes every task step (holdSeconds included) within 90 s of simulated time
+//    (longer only where stated) — proof that each task is achievable in the actual physics;
+//  • the same two checks hold when the learner skipped the steps before it (curriculum-skip.test.ts).
+// Plus static checks (ids, order, texts, glossary references, controls/cameras/overlays, quizzes) and focused
+// tests of the manoeuvre detectors, Show-me takeover, lessons 5, 16 and 18. The harness is curriculum-harness.ts.
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { Simulation } from '../../sim/simulation';
-import { AutoCrew } from '../../sim/autocrew';
-import type { ScenarioInit, WindSettings } from '../../sim/types';
-import { LessonRunner } from '../engine';
+import type { ScenarioInit, SimSnapshot } from '../../sim/types';
+import { optimalVmg, type PolarTable } from '../../sim/polarTable';
+import polars from '../../sim/data/polars.json';
 import { glossaryRefs } from '../glossary';
-import {
-  CAMERA_KEYS, CONTROL_GROUPS, CONTROL_KEYS, OVERLAY_KEYS,
-  type AppApi, type CameraKey, type Lesson, type LessonActions, type LessonView, type LessonViewModel, type OverlayKey,
-  type TaskStatus,
-} from '../types';
+import { CAMERA_KEYS, CONTROL_GROUPS, CONTROL_KEYS, OVERLAY_KEYS } from '../types';
 import { CURRICULUM } from '../curriculum';
 import { LAB_SCENARIO, inMaxDriveWindow } from '../curriculum/05-sail-is-a-wing';
-import { fromDeg, fromKn, sailing } from '../curriculum/helpers';
-import { RACE_TIME } from '../curriculum/18-sailing-smart';
-
-/** The spec §11.2 order. */
-const SPEC_ORDER = [
-  'meet-the-boat', 'finding-the-wind', 'points-of-sail', 'apparent-wind', 'sail-is-a-wing', 'drive-and-heel',
-  'jib-telltales', 'mainsail-trim', 'main-and-jib', 'keel-and-balance', 'tacking', 'out-of-irons', 'gybing',
-  'running', 'spinnaker-basics', 'spinnaker-reaching-running', 'spinnaker-gybe-douse', 'sailing-smart',
-];
-
-/**
- * Lessons whose "Show me" run is blocked only by a known sim defect from the lead's 2026-09-29 review
- * (a fix round is landing separately). Re-enable each one when its fix is in main.
- */
-const PENDING_SIM_FIX: Readonly<Record<string, string>> = {
-  // C1: switching the whisker pole on while running yanks the jib across; the sim blows up to NaN within ~2 s.
-  running: 'C1',
-};
-
-const FRAME = 1 / 60;
-const IDLE_S = 5;
-const SHOW_ME_S = 90;
-
-// ---- a small App backed by the real simulation ------------------------------------------------------
-
-class SimApp implements AppApi {
-  sim: Simulation;
-  camera: CameraKey = 'chase';
-  readonly overlayState = Object.fromEntries(OVERLAY_KEYS.map((k) => [k, false])) as Record<OverlayKey, boolean>;
-
-  constructor(init: ScenarioInit) {
-    this.sim = SimApp.make(init);
-  }
-
-  private static make(init: ScenarioInit): Simulation {
-    const s = new Simulation(init);
-    s.crew = new AutoCrew();
-    return s;
-  }
-
-  get controls() { return this.sim.controls; }
-  set controls(c) { this.sim.controls = c; }
-  setMode(): void {}
-  setCamera(c: CameraKey): void { this.camera = c; }
-  setOverlay(k: OverlayKey, on: boolean): void { this.overlayState[k] = on; }
-  overlays(): Record<OverlayKey, boolean> { return { ...this.overlayState }; }
-  setWind(p: Partial<WindSettings>): void { this.sim.setWind(p); }
-  setTimeOfDay(): void {}
-  setTimeScale(): void {}
-  togglePause(): void {}
-  setQuality(): void {}
-  setSound(): void {}
-  scenario(init: ScenarioInit): void { this.sim = SimApp.make(init); }
-  startLesson(): void {}
-}
-
-class Panel implements LessonView {
-  actions!: LessonActions;
-  model: LessonViewModel | null = null;
-  task: TaskStatus | null = null;
-  readonly hints: string[] = [];
-  bind(a: LessonActions): void { this.actions = a; }
-  render(m: LessonViewModel): void { this.model = m; }
-  setTask(s: TaskStatus): void { this.task = s; }
-  setHint(t: string | null): void { if (t !== null) this.hints.push(t); }
-}
-
-class Driver {
-  constructor(readonly app: SimApp, readonly runner: LessonRunner) {}
-
-  frame(): void {
-    const sim = this.app.sim;
-    sim.step();
-    sim.step();
-    this.runner.update(sim.snapshot(), FRAME);
-  }
-
-  /** Run up to `seconds` of simulated time; returns the time at which `stop()` became true, else null. */
-  run(seconds: number, stop?: () => boolean): number | null {
-    const n = Math.round(seconds / FRAME);
-    for (let i = 1; i <= n; i++) {
-      this.frame();
-      if (stop?.()) return i * FRAME;
-    }
-    return null;
-  }
-}
-
-/** Play a lesson like a learner who reads each step for 5 s, then presses Show me on every task. */
-function playLesson(lesson: Lesson): { hints: string[]; app: SimApp } {
-  const app = new SimApp(sailing({ twsKn: 10, twa: 90 }));
-  const panel = new Panel();
-  const runner = new LessonRunner([lesson], app, panel, { storage: null, advanceDelay: 0.25, hintAfter: 1e9 });
-  const drive = new Driver(app, runner);
-  runner.start(lesson.id);
-  drive.frame(); // the first snapshot starts the lesson: setup + step 1
-
-  lesson.steps.forEach((st, i) => {
-    const where = `${lesson.id} step ${i + 1} "${st.title}"`;
-    expect(runner.activeStepIndex, `${where}: not the active step`).toBe(i);
-    runner.requestHint(); // from now on the step's hint() is re-evaluated every second
-    if (!st.task) {
-      drive.run(IDLE_S);
-      expect(runner.activeStepIndex, `${where}: a narrative step advanced by itself`).toBe(i);
-      runner.next();
-      return;
-    }
-    const idle = drive.run(IDLE_S, () => panel.task?.done === true);
-    expect(idle, `${where}: completed without the learner doing anything`).toBeNull();
-    runner.showMe();
-    const t = drive.run(SHOW_ME_S, () => panel.task?.done === true);
-    expect(t, `${where}: "Show me" did not complete the task within ${SHOW_ME_S} s`).not.toBeNull();
-    const moved = drive.run(2, () => runner.activeStepIndex !== i);
-    expect(moved, `${where}: the runner did not move on after success`).not.toBeNull();
-  });
-
-  expect(runner.currentPhase).toBe(lesson.quiz?.length ? 'quiz' : 'complete');
-  return { hints: panel.hints, app };
-}
-
-// ---- tests ---------------------------------------------------------------------------------------------
+import { fromDeg, fromKn, TackWatch, type TackResult } from '../curriculum/helpers';
+import { MARK_DISTANCE, REACHED_M, TARGET_TIME, TWD } from '../curriculum/18-sailing-smart';
+import {
+  IDLE_FRAME, LONG_IDLE_S, LONG_SHOW_ME_S, PENDING_SIM_FIX, SPEC_ORDER, gotoStep, playLesson, stepKey,
+} from './curriculum-harness';
 
 describe('curriculum: structure and texts', () => {
   it('has the 18 lessons of spec §11.2, in order, with unique kebab-case ids', () => {
@@ -227,69 +110,111 @@ describe('curriculum: every lesson is playable in the real simulation', () => {
       for (const h of hints) for (const r of glossaryRefs(h)) expect(r.entry, `${lesson.id} hint: [[${r.key}]]`).toBeDefined();
       const b = app.sim.boat;
       for (const v of [b.e, b.n, b.psi, b.u, b.v, b.r, b.phi, b.p]) expect(Number.isFinite(v), `${lesson.id}: sim state`).toBe(true);
-    }, 60_000);
+    }, 120_000);
   }
+
+  it('lists long idle windows and budgets only for steps that exist', () => {
+    const keys = new Set(CURRICULUM.flatMap((l) => l.steps.map((st) => stepKey(l, st))));
+    for (const k of [...Object.keys(LONG_IDLE_S), ...Object.keys(LONG_SHOW_ME_S)]) expect(keys.has(k), k).toBe(true);
+  });
 });
 
-/** Skip straight past the first `k` steps (pressing Next after 1 s each), then press Show me on step k. */
-function showMeAfterSkipping(lesson: Lesson, k: number): number | null {
-  const app = new SimApp(sailing({ twsKn: 10, twa: 90 }));
-  const panel = new Panel();
-  const runner = new LessonRunner([lesson], app, panel, { storage: null, advanceDelay: 0.25, hintAfter: 1e9 });
-  const drive = new Driver(app, runner);
-  runner.start(lesson.id);
-  drive.frame();
-  for (let i = 0; i < k; i++) {
-    drive.run(1);
-    runner.next();
-  }
-  expect(runner.activeStepIndex).toBe(k);
-  drive.run(0.5);
-  runner.showMe();
-  return drive.run(SHOW_ME_S, () => panel.task?.done === true);
-}
+describe('TackWatch', () => {
+  /** Just the snapshot fields TackWatch reads. */
+  const at = (t: number, twaDeg: number, kn: number): SimSnapshot =>
+    ({ t, wind: { twa: fromDeg(twaDeg) }, boat: { speed: fromKn(kn) } }) as unknown as SimSnapshot;
 
-describe('curriculum: every Show me also works after skipping the steps before it', () => {
-  for (const lesson of CURRICULUM) {
-    const pending = PENDING_SIM_FIX[lesson.id];
-    lesson.steps.forEach((st, k) => {
-      if (!st.task || k === 0) return;
-      (pending ? it.skip : it)(`${lesson.id} step ${k + 1} "${st.title}"${pending ? ` (pending sim fix ${pending})` : ''}`, () => {
-        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-        try {
-          const t = showMeAfterSkipping(lesson, k);
-          expect(t, `${lesson.id} step ${k + 1}: Show me did not complete the task within ${SHOW_ME_S} s after skipping`).not.toBeNull();
-          expect(errors.mock.calls.length, `${lesson.id} step ${k + 1}: errors`).toBe(0);
-        } finally {
-          errors.mockRestore();
-        }
-      }, 30_000);
+  it('takes the entry speed from before a slow pinch into the tack, so pinching is not flattered', () => {
+    const w = new TackWatch();
+    let t = 0;
+    const feed = (dur: number, twa0: number, twa1: number, v0: number, v1: number) => {
+      let r: TackResult | null = null;
+      for (let i = 0; i <= dur * 10; i++) {
+        const f = i / (dur * 10);
+        r = w.update(at(t, twa0 + (twa1 - twa0) * f, v0 + (v1 - v0) * f)) ?? r;
+        t += 0.1;
+      }
+      return r;
+    };
+    feed(10, 45, 45, 5.5, 5.5); // settled close-hauled
+    feed(6, 45, 33, 5.5, 4.2); // pinching slowly up toward the wind
+    expect(feed(4, 33, -35, 4.2, 3.2)).toBeNull(); // through the wind
+    const r = feed(6, -35, -45, 3.2, 4.5); // accelerating on the new tack
+    expect(r).not.toBeNull();
+    expect(r!.entry).toBeCloseTo(5.5, 1);
+    expect(r!.min).toBeCloseTo(3.2, 1);
+    expect(r!.ratio).toBeLessThan(0.6);
+  });
+});
+
+describe('Show me hands the controls back', () => {
+  it('stops demonstrating as soon as the learner takes the helm', () => {
+    const { app, panel, runner, drive } = gotoStep('tacking', 'Three good tacks');
+    runner.showMe();
+    // Let the crew tack once, then grab the tiller between tacks.
+    let tacked = false;
+    drive.run(60, () => {
+      const m = app.sim.snapshot().maneuver;
+      if (m === 'tack') tacked = true;
+      return tacked && m === null;
     });
-  }
+    expect(tacked).toBe(true);
+    app.controls.helmMode = 'manual';
+    app.controls.tiller = 0;
+    let tackedAgain = false;
+    drive.run(40, () => { tackedAgain ||= app.sim.snapshot().maneuver === 'tack'; return false; });
+    expect(tackedAgain, 'the demo kept tacking after the learner took the helm').toBe(false);
+    expect(panel.task?.done).toBe(false);
+  }, 30_000);
 });
 
-describe('lesson 18: the race', () => {
-  it('sends a boat that runs out of time back to the start line for another attempt', () => {
-    const lesson = CURRICULUM.find((l) => l.id === 'sailing-smart')!;
-    const raceStep = lesson.steps.findIndex((st) => st.title.startsWith('Race'));
-    const app = new SimApp(sailing({ twsKn: 10, twa: 90 }));
-    const panel = new Panel();
-    const runner = new LessonRunner([lesson], app, panel, { storage: null, advanceDelay: 0.25, hintAfter: 1e9 });
-    const drive = new Driver(app, runner);
-    runner.start(lesson.id);
-    drive.frame();
-    for (let i = 0; i < raceStep; i++) runner.next();
-    drive.run(1);
-    // Reach across the course instead of beating: no progress upwind.
+describe('lesson 18: the race to the windward mark', () => {
+  const RACE = 'Race to the windward mark';
+
+  it('places a windward mark 500 m dead upwind of the start, turns the laylines on, and derives the target time from the polar', () => {
+    const { app } = gotoStep('sailing-smart', RACE);
+    expect(app.marks.length).toBe(1);
+    const m = app.marks[0]!;
+    expect(m.kind).toBe('windward');
+    expect(Math.hypot(m.e, m.n)).toBeCloseTo(MARK_DISTANCE, 6);
+    expect(Math.atan2(m.e, m.n)).toBeCloseTo(fromDeg(TWD - 360), 6); // dead upwind: along the wind's direction
+    expect(app.overlayState.laylines).toBe(true);
+    expect(REACHED_M).toBe(25);
+    const bestVmg = fromKn(optimalVmg(polars as PolarTable, 12, true).vmg);
+    expect(TARGET_TIME).toBe(Math.ceil((1.35 * MARK_DISTANCE) / bestVmg));
+  });
+
+  it('sends a boat that runs out of time back to the start for another attempt', () => {
+    const { app, panel, runner, drive } = gotoStep('sailing-smart', RACE);
+    // Reach across the course instead of beating: no progress toward the mark.
     app.controls.helmMode = 'twa';
     app.controls.helmTarget = fromDeg(95);
     const firstSim = app.sim;
-    drive.run(RACE_TIME + 3);
+    drive.run(TARGET_TIME + 3, undefined, IDLE_FRAME);
     expect(app.sim).not.toBe(firstSim);
     expect(Math.hypot(app.sim.boat.e, app.sim.boat.n)).toBeLessThan(40);
+    expect(app.marks.length).toBe(1);
     expect(panel.task?.done).toBe(false);
     runner.requestHint();
     expect(panel.hints[panel.hints.length - 1]).toMatch(/attempt 2/);
+  }, 60_000);
+
+  // The idle learner — autopilot on the beating angle, never tacking — is the playthrough's 600 s idle window
+  // for this step (LONG_IDLE_S): one long tack sails past a mark dead upwind.
+});
+
+describe('lesson 16: the broach demonstration', () => {
+  it('rounds up on its own, and Back to the task restores the 10 kn breeze with the spinnaker flying', () => {
+    const { app, runner, drive } = gotoStep('spinnaker-reaching-running', 'Broaching');
+    const from = drive.events.length;
+    drive.run(15, () => drive.events.slice(from).some((e) => e.type === 'roundUp'));
+    expect(drive.events.slice(from).some((e) => e.type === 'roundUp'), 'a roundUp event after entering the step').toBe(true);
+    runner.back();
+    drive.run(10);
+    expect(app.sim.wind.settings.tws).toBeCloseTo(fromKn(10), 6);
+    const k = app.sim.snapshot().sails.spinnaker;
+    expect(k.hoist).toBeGreaterThan(0.95);
+    expect(k.collapsed).toBeLessThan(0.05);
   }, 30_000);
 });
 

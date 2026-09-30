@@ -304,6 +304,8 @@ export class InputController {
     this.shift = e.shiftKey;
     if (kind === 'text') return;
     if (this.suspended) {
+      // Holding `?` must not open and then (on auto-repeat) close the dialog again.
+      if (e.repeat) return;
       if (id === '?') this.commands.toggleHelp();
       else if (id === 'escape') this.commands.escape();
       return;

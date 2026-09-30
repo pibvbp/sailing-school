@@ -1,12 +1,17 @@
 // Lesson 3 — Points of sail (spec §11.2): the wheel overlay; close-hauled, beam reach, broad reach and run
 // with the crew trimming — and a comparison of the speeds the learner actually reached.
 import type { Lesson, LessonCtx, Step } from '../types';
-import { absTwa, downKey, fmt, holdTwa, sailing, speedKn, step, upKey, view } from './helpers';
+import { absTwa, downKey, fmt, holdTwa, mem, sailing, speedKn, step, upKey, view } from './helpers';
 
 type Point = 'closeHauled' | 'beam' | 'broad' | 'run';
+type Speeds = Partial<Record<Point, number>>;
 
-/** Speeds reached in this run of the lesson (kn), shown in the last step. */
-const reached: Record<Point, number> = { closeHauled: NaN, beam: NaN, broad: NaN, run: NaN };
+/** Hold each point this long; its speed is the mean over the last SETTLED_S, once the boat has settled. */
+const HOLD_S = 12;
+const SETTLED_S = 6;
+
+/** Settled speeds (kn) of this run of the lesson, kept in ctx.data and shown in the last step. */
+const speeds = (data: Readonly<Record<string, unknown>>): Speeds => (data['speeds'] as Speeds | undefined) ?? {};
 
 interface PointDef { key: Point; name: string; action: string; lo: number; hi: number; show: number; body: string }
 
@@ -23,11 +28,14 @@ function pointStep(p: PointDef): Step {
     controls: ['helm'],
     autoTrim: { main: true, jib: true },
     task: {
-      label: `${p.action} (true wind angle ${p.lo}–${p.hi}°) for 5 s`,
-      holdSeconds: 5,
+      label: `${p.action} (true wind angle ${p.lo}–${p.hi}°) for ${HOLD_S} s`,
+      holdSeconds: HOLD_S,
       check: (c) => {
-        if (!inRange(c) || speedKn(c.snap) < 2) return false;
-        reached[p.key] = speedKn(c.snap);
+        const samples = mem<{ t: number; v: number }[]>(c, 'samples', () => []);
+        if (!inRange(c) || speedKn(c.snap) < 2) { samples.length = 0; return false; }
+        samples.push({ t: c.t, v: speedKn(c.snap) });
+        while (samples.length > 1 && c.t - samples[0]!.t > SETTLED_S) samples.shift();
+        c.data['speeds'] = { ...speeds(c.data), [p.key]: samples.reduce((a, x) => a + x.v, 0) / samples.length };
         return true;
       },
     },
@@ -48,15 +56,13 @@ export const pointsOfSail: Lesson = {
   module: 'First steps',
   title: 'Points of sail',
   summary: 'Close-hauled, reaching and running: the names for your angle to the wind, and how fast each one is.',
-  setup: (c) => {
-    for (const k of Object.keys(reached) as Point[]) reached[k] = NaN;
-    c.app.scenario(sailing({ twsKn: 10, twa: 90 }));
-  },
+  // A close reach: none of the four points the learner is asked to sail.
+  setup: (c) => c.app.scenario(sailing({ twsKn: 10, twa: 65 })),
   steps: [
     step({
       title: 'Your angle to the wind',
       body: `<p>Your angle to the true wind has a name. From the edge of the no-go zone outward: [[close-hauled]] (about 40–50° off the wind), [[close-reach|close reach]], [[beam-reach|beam reach]] (90°, wind straight across the boat), [[broad-reach|broad reach]], and the [[run]], with the wind from behind. Together they are the [[points-of-sail]]; the wheel on the water marks each sector.</p>
-<p>For this lesson the autopilot holds your angle to the wind (<strong>Hold TWA</strong> in the trim panel). <kbd>←</kbd> and <kbd>→</kbd> still turn the bow; the autopilot then keeps the new angle. The crew trims the sails, so you can watch the speed on the instrument strip.</p>`,
+<p>For this lesson the autopilot holds your angle to the wind (<strong>Hold TWA</strong> in the trim panel) — right now a close reach, 65° off it. <kbd>←</kbd> and <kbd>→</kbd> still turn the bow; the autopilot then keeps the new angle. The crew trims the sails, so you can watch the speed on the instrument strip.</p>`,
       camera: 'top',
       overlays: view('wheel'),
       controls: ['helm'],
@@ -82,7 +88,7 @@ export const pointsOfSail: Lesson = {
     }),
     step({
       title: 'Compare the speeds',
-      body: () => `<p>Your speeds in 10 knots of wind: close-hauled <strong>${fmt(reached.closeHauled)} kn</strong>, beam reach <strong>${fmt(reached.beam)} kn</strong>, broad reach <strong>${fmt(reached.broad)} kn</strong>, run <strong>${fmt(reached.run)} kn</strong>.</p>
+      body: (data) => `<p>Your settled speeds in 10 knots of wind: close-hauled <strong>${fmt(speeds(data).closeHauled ?? NaN)} kn</strong>, beam reach <strong>${fmt(speeds(data).beam ?? NaN)} kn</strong>, broad reach <strong>${fmt(speeds(data).broad ?? NaN)} kn</strong>, run <strong>${fmt(speeds(data).run ?? NaN)} kn</strong>.</p>
 <p>The reach is usually fastest: the sails' force points mostly forward and the wind you feel is still strong. Close-hauled, much of that force pushes the boat sideways instead. On a run you sail away from your own wind, so it feels light, and the sails can only be pushed along, not pull like a wing.</p>`,
       camera: 'chase',
       overlays: view('wheel'),

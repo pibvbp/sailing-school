@@ -76,6 +76,7 @@ function mockApp(): MockApp {
     setSound: () => {},
     scenario: () => { calls.push('scenario'); },
     startLesson: (id) => { calls.push(`start:${id}`); app.runner?.start(id); },
+    setMarks: (m) => { calls.push(`marks:${m.map((x) => x.id).join(',')}`); },
   };
   return app;
 }
@@ -297,6 +298,34 @@ describe('LessonRunner: tasks', () => {
     expect(panel.task?.done).toBe(false);
     h.frame(1);
     expect(panel.task?.done).toBe(true);
+  });
+
+  it('ticks the active step every frame from its second frame until its task succeeds, never while paused', () => {
+    const ticks: number[] = [];
+    let ok = false;
+    const lesson: Lesson = {
+      id: 'k', module: 'M', title: 'T', summary: 'S', setup: () => {},
+      steps: [
+        { title: 'Ticking', body: '', tick: (c) => { ticks.push(c.t); }, task: { label: 'x', check: () => ok } },
+        { title: 'Narrative', body: '', tick: () => { ticks.push(-1); } },
+      ],
+    };
+    const { runner, h } = setup([lesson], { advanceDelay: 0 });
+    h.frame();
+    runner.start('k');
+    h.frame(1);
+    expect(ticks).toEqual([]); // the first frame of a step may predate it
+    h.frame(3);
+    expect(ticks.length).toBe(3);
+    for (let i = 0; i < 5; i++) runner.update(h.s, 0.1); // paused: snapshot time frozen
+    expect(ticks.length).toBe(3);
+    ok = true;
+    h.frame(1); // success: no tick after this frame's check
+    const n = ticks.length;
+    h.frame(1); // advances to the narrative step
+    h.frame(3);
+    expect(ticks.slice(0, n).every((t) => t > 0)).toBe(true);
+    expect(ticks.slice(n)).toEqual([-1, -1]);
   });
 
   it('contains errors thrown by lesson code', () => {

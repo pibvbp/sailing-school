@@ -46,11 +46,13 @@ export const jibTelltalesLesson: Lesson = {
     }),
     step({
       title: 'Trim until they stream',
-      body: `<p>Now trim with <kbd>↑</kbd> until the windward telltales stop lifting and every ribbon streams straight back. The jib is in the [[groove]]: the flow is smooth on both sides. Hold <kbd>Shift</kbd> for fine trim.</p>`,
+      body: `<p>The jib is eased too far: its windward telltales lift. Now trim with <kbd>↑</kbd> until they stop lifting and every ribbon streams straight back. The jib is in the [[groove]]: the flow is smooth on both sides. Hold <kbd>Shift</kbd> for fine trim.</p>`,
       camera: 'helm',
       overlays: view('telltaleCam'),
       controls: ['jibSheet'],
       autoTrim: { main: true, jib: false },
+      // Start eased, whether or not the step before was done.
+      onEnter: (c) => { c.app.controls.jibSheet = Math.min(c.app.controls.jibSheet, 0.2); },
       task: {
         label: 'Trim until all the jib telltales stream, for 3 s',
         holdSeconds: 3,

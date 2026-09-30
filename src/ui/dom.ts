@@ -220,17 +220,28 @@ export function textHtml(text: string): string {
 
 /**
  * One shared definition card for every `.sx-gloss` term inside `root`: shown on hover, focus or tap; hidden on
- * pointer-out, blur, a tap elsewhere, Esc (via `hide`) and scrolling. A tap never closes the card it just opened
+ * pointer-out, blur, a tap elsewhere, Esc (via `hide`) and when its term scrolls out of view (it follows the term
+ * while it stays visible). A tap never closes the card it just opened
  * (touch browsers focus the term first, then deliver the click).
  */
-export function installGlossaryTips(root: HTMLElement): { hide(): void; dispose(): void } {
+export function installGlossaryTips(root: HTMLElement): { hide(): boolean; dispose(): void } {
   const tip = h('div', { class: 'sx-tip', attrs: { role: 'tooltip', id: 'sx-gloss-tip', hidden: true } }, [
     h('div', 'sx-tip-term'),
     h('div', 'sx-tip-def'),
   ]);
   root.append(tip);
   let current: HTMLElement | null = null;
+  let frame = 0;
 
+  const place = (term: HTMLElement) => {
+    const r = term.getBoundingClientRect();
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const x = Math.min(Math.max(8, r.left + r.width / 2 - tw / 2), innerWidth - tw - 8);
+    const above = r.top - th - 8;
+    const y = above >= 8 ? above : Math.min(r.bottom + 8, innerHeight - th - 8);
+    tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  };
   const show = (term: HTMLElement) => {
     const entry = lookupTerm(term.dataset['term'] ?? '');
     if (!entry) return;
@@ -240,13 +251,7 @@ export function installGlossaryTips(root: HTMLElement): { hide(): void; dispose(
     tip.firstElementChild!.textContent = entry.term;
     tip.lastElementChild!.textContent = entry.def;
     tip.hidden = false;
-    const r = term.getBoundingClientRect();
-    const tw = tip.offsetWidth;
-    const th = tip.offsetHeight;
-    const x = Math.min(Math.max(8, r.left + r.width / 2 - tw / 2), innerWidth - tw - 8);
-    const above = r.top - th - 8;
-    const y = above >= 8 ? above : Math.min(r.bottom + 8, innerHeight - th - 8);
-    tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+    place(term);
   };
   const hide = () => {
     current?.removeAttribute('aria-describedby');
@@ -270,24 +275,42 @@ export function installGlossaryTips(root: HTMLElement): { hide(): void; dispose(
     if (!t) { if (current) hide(); return; }
     if (current !== t) show(t);
   };
-  const scrolled = () => { if (current) hide(); };
+  // The card follows its term when a panel scrolls or the window resizes — e.g. keyboard focus scrolling a term
+  // into view — and goes away only once the term is clipped out of its scroll container (or the viewport).
+  const follow = () => {
+    frame = 0;
+    const term = current;
+    if (!term) return;
+    const r = term.getBoundingClientRect();
+    const clip = term.closest('.sx-lp-content, .sx-panel-scroll, .sx-modal-body, .sx-gloss-list');
+    const c = clip ? clip.getBoundingClientRect() : { top: 0, bottom: innerHeight, left: 0, right: innerWidth };
+    const visible = r.width > 0 && r.bottom > c.top && r.top < c.bottom && r.right > c.left && r.left < c.right;
+    if (visible) place(term); else hide();
+  };
+  const moved = () => { if (current && !frame) frame = requestAnimationFrame(follow); };
   root.addEventListener('pointerover', over);
   root.addEventListener('pointerout', out);
   root.addEventListener('focusin', focusIn);
   root.addEventListener('focusout', focusOut);
   root.addEventListener('click', tap);
-  root.addEventListener('scroll', scrolled, true);
-  addEventListener('resize', scrolled);
+  root.addEventListener('scroll', moved, { capture: true, passive: true });
+  addEventListener('resize', moved);
   return {
-    hide: () => { if (current) hide(); },
+    /** Hides the card; returns whether one was showing (so Esc can stop there). */
+    hide: () => {
+      if (!current) return false;
+      hide();
+      return true;
+    },
     dispose: () => {
       root.removeEventListener('pointerover', over);
       root.removeEventListener('pointerout', out);
       root.removeEventListener('focusin', focusIn);
       root.removeEventListener('focusout', focusOut);
       root.removeEventListener('click', tap);
-      root.removeEventListener('scroll', scrolled, true);
-      removeEventListener('resize', scrolled);
+      root.removeEventListener('scroll', moved, { capture: true });
+      removeEventListener('resize', moved);
+      if (frame) cancelAnimationFrame(frame);
       tip.remove();
     },
   };
@@ -433,9 +456,14 @@ export class Segmented<T extends string> {
   private current: T | null = null;
   private enabled = true;
 
-  constructor(label: string, items: SegItem<T>[], onPick: (v: T) => void, cls = '') {
+  /**
+   * `followFocus` (default true) is the standard radio-group model: arrows move and pick. With `false`, arrows only
+   * move focus and Enter/Space commits — for groups where picking is heavy or closes something (quality popover, mode).
+   */
+  constructor(label: string, items: SegItem<T>[], onPick: (v: T) => void, cls = '', opts: { followFocus?: boolean } = {}) {
+    const followFocus = opts.followFocus ?? true;
     this.el = h('div', { class: `sx-seg ${cls}`.trim(), attrs: { role: 'radiogroup', 'aria-label': label } });
-    // Radio-group keyboard model: one tab stop, arrows move (and pick), Home/End jump.
+    // Radio-group keyboard model: one tab stop, arrows move (and pick, unless followFocus is off), Home/End jump.
     this.el.addEventListener('keydown', (e) => {
       const keys = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'];
       if (!keys.includes(e.key)) return;
@@ -446,8 +474,13 @@ export class Segmented<T extends string> {
       const i = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1
         : (Math.max(0, at) + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length;
       const [value, b] = list[i]!;
-      b.focus();
-      onPick(value);
+      if (followFocus) {
+        b.focus();
+        onPick(value);
+      } else {
+        for (const x of this.buttons.values()) x.tabIndex = x === b ? 0 : -1;
+        b.focus();
+      }
     });
     for (const it of items) {
       const b = h('button', {
@@ -544,11 +577,12 @@ export class Popover {
 
   get open(): boolean { return this.isOpen; }
 
-  toggle(): void {
-    if (this.isOpen) this.close(); else this.show();
+  /** `focusInside`: opened from the keyboard, so move focus to the checked option (or the first control). */
+  toggle(focusInside = false): void {
+    if (this.isOpen) this.close(); else this.show(focusInside);
   }
 
-  show(): void {
+  show(focusInside = false): void {
     if (this.isOpen) return;
     Popover.openOne?.close();
     Popover.openOne = this;
@@ -558,16 +592,25 @@ export class Popover {
     this.place();
     document.addEventListener('pointerdown', this.onDoc, true);
     addEventListener('resize', this.onResize);
+    // Mouse users keep focus where it was (arrow keys keep steering); keyboard users land inside the card.
+    if (focusInside) this.el.querySelector<HTMLElement>('[aria-checked="true"], button, input')?.focus({ preventScroll: true });
+  }
+
+  /** A click generated by Enter/Space on a button has `detail === 0`. */
+  static fromKeyboard(e: MouseEvent): boolean {
+    return e.detail === 0;
   }
 
   close(): void {
     if (!this.isOpen) return;
     this.isOpen = false;
     if (Popover.openOne === this) Popover.openOne = null;
+    const hadFocus = this.el.contains(document.activeElement);
     this.el.hidden = true;
     this.anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', this.onDoc, true);
     removeEventListener('resize', this.onResize);
+    if (hadFocus) this.anchor.focus({ preventScroll: true }); // e.g. after Enter committed a choice
   }
 
   static closeAll(): boolean {
@@ -592,7 +635,6 @@ export class Popover {
 export class Modal {
   readonly el: HTMLElement;
   readonly body: HTMLElement;
-  private readonly card: HTMLElement;
   private shown = false;
   private returnFocus: HTMLElement | null = null;
   /** Called after the dialog opens and before focus is restored on close (the Hud suspends keys and sets inert). */
@@ -600,8 +642,9 @@ export class Modal {
 
   constructor(host: HTMLElement, title: string, cls = '') {
     const titleId = `sx-m-${Math.random().toString(36).slice(2, 9)}`;
-    this.body = h('div', 'sx-modal-body');
-    this.card = h('div', {
+    // Focus lands here on open (tabindex −1): it is the scroller, so arrows / Space / PageDown scroll at once.
+    this.body = h('div', { class: 'sx-modal-body', attrs: { tabindex: '-1' } });
+    const card = h('div', {
       class: `sx-modal-card sx-glass ${cls}`.trim(),
       attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabindex: '-1' },
     }, [
@@ -611,7 +654,7 @@ export class Modal {
       ]),
       this.body,
     ]);
-    this.el = h('div', { class: 'sx-modal', attrs: { hidden: true } }, [this.card]);
+    this.el = h('div', { class: 'sx-modal', attrs: { hidden: true } }, [card]);
     this.el.addEventListener('pointerdown', (e) => { if (e.target === this.el) this.close(); });
     this.el.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
@@ -631,7 +674,7 @@ export class Modal {
     this.el.hidden = false;
     this.onToggle?.(true);
     requestAnimationFrame(() => this.el.classList.add('is-in'));
-    this.card.focus({ preventScroll: true });
+    this.body.focus({ preventScroll: true });
   }
 
   close(): void {

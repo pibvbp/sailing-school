@@ -1,53 +1,110 @@
 // Lesson 18 — Sailing smart (spec §11.2): VMG and polars, laylines, gusts and lulls, lifts and headers.
 // Task: reach the windward mark in shifty, gusty wind within the target time.
 //
-// AppApi has no way to place a mark, so the "mark" is a windward finish line through RACE_MARK, square to the
-// mean wind, RACE_DISTANCE metres upwind of the race start (the scenario origin). The App can draw a windward
-// mark at RACE_MARK for a visible target; a race that runs out of time restarts from the same start.
+// The race: a windward mark MARK_DISTANCE m dead upwind of the start, in gusty wind that swings ±10° over
+// about 90 s. The autopilot may hold the angle to the wind; the learner's job is to choose when to tack — on the
+// headers, and on the layline. One long tack sails past a mark dead upwind, so doing nothing never finishes.
+// Measured on this course (six wind seeds): tacking on 5° headers and on the layline finishes in 237–244 s,
+// one tack on the layline only in 236–247 s (usually slower), tacking on headers with no eye on the laylines
+// often never gets there; the target time is 313 s.
+import { fromDeg, fromKn, toDeg } from '../../shared/units';
 import type { SimSnapshot } from '../../sim/types';
-import type { Lesson, LessonCtx } from '../types';
+import type { Lesson, LessonCtx, MarkSpec } from '../types';
 import {
-  absTwa, angleDiff, autoTrim, bestBeat, downKey, fmt, fromDeg, holdTwa, mem, peek, POLARS, sailing, speedKn, step, tackOf,
-  toDeg, twsKn, upKey, view, vmgKn,
+  absTwa, angleDiff, autoTrim, bestBeat, bestRun, downKey, fmt, holdHeading, holdTwa, mem, peek, sailing, speedKn, step,
+  tackOf, twsKn, upKey, view, vmgKn, type Demo,
 } from './helpers';
-import { optimalVmg } from '../../sim/polarTable';
 
 const TWS = 12;
 /** Mean wind direction for the whole lesson (deg). */
 export const TWD = 200;
-/** Distance from the race start to the windward finish line (m) and the time allowed (s). */
-export const RACE_DISTANCE = 150;
-export const RACE_TIME = 100;
+/** The windward mark: this far dead upwind of the start (m); "reached" within REACHED_M. */
+export const MARK_DISTANCE = 500;
+export const REACHED_M = 25;
+/**
+ * Time allowed (s): 1.35 × the time it takes at the polar's best upwind VMG — room for a few tacks and the odd
+ * wrong call, not for ignoring the shifts or sailing past the laylines.
+ */
+export const TARGET_TIME = Math.ceil((1.35 * MARK_DISTANCE) / fromKn(bestBeat(TWS).vmg));
 /** A shift this big against your tack is a header worth tacking on (deg). */
 const HEADER = 5;
+/** Tack a little past the layline: leeway and the tack itself cost a few degrees. */
+const LAYLINE_MARGIN = 4;
+
+const MARK: MarkSpec = {
+  id: 'windward', kind: 'windward',
+  e: MARK_DISTANCE * Math.sin(fromDeg(TWD)), n: MARK_DISTANCE * Math.cos(fromDeg(TWD)),
+};
+
+/** The start: the scenario origin, close-hauled on starboard tack, autopilot on, crew trimming. */
+const RACE_START = sailing({
+  twsKn: TWS, twdDeg: TWD, twa: Math.round(bestBeat(TWS).twa), gustiness: 0.5, shiftDeg: 10, shiftPeriod: 90, seed: 31,
+  controls: { autoTrim: autoTrim(true, true, false) },
+});
+
+// ---- race geometry ---------------------------------------------------------------------------------------
 
 /** The wind's shift from its mean direction (deg, + = veered / clockwise). */
 const shiftDeg = (s: SimSnapshot): number => angleDiff(toDeg(s.wind.twd), TWD);
 /** Positive when the current shift lifts you, negative when it heads you. */
 const liftDeg = (s: SimSnapshot): number => shiftDeg(s) * tackOf(s);
 
-/** The windward mark (sim world east, north; m): the race starts at the origin. */
-export const RACE_MARK = { e: RACE_DISTANCE * Math.sin(fromDeg(TWD)), n: RACE_DISTANCE * Math.cos(fromDeg(TWD)) } as const;
+interface ToMark { dist: number; bearing: number; /** The mark's direction relative to straight upwind now (deg, + = right). */ rel: number }
 
-const RACE_SCENARIO = sailing({
-  twsKn: TWS, twdDeg: TWD, twa: 42, gustiness: 0.6, shiftDeg: 10, shiftPeriod: 90, seed: 21,
-  controls: { autoTrim: autoTrim(true, true, false) },
-});
+function toMark(s: SimSnapshot): ToMark {
+  const de = MARK.e - s.boat.pos.x, dn = MARK.n - s.boat.pos.y;
+  const bearing = ((toDeg(Math.atan2(de, dn)) % 360) + 360) % 360;
+  return { dist: Math.hypot(de, dn), bearing, rel: angleDiff(bearing, toDeg(s.wind.twd)) };
+}
+
+/** Can the boat fetch the mark on its current tack? (Starboard tack points left of the wind, port tack right.) */
+const fetches = (s: SimSnapshot, beat: number): boolean => {
+  const { rel } = toMark(s);
+  return tackOf(s) > 0 ? rel <= -(beat - 1) : rel >= beat - 1;
+};
+
+/** Is the boat beyond the layline for the other tack — could it fetch the mark after tacking? */
+const pastLayline = (s: SimSnapshot, beat: number): boolean => {
+  const { rel } = toMark(s);
+  return tackOf(s) > 0 ? rel >= beat + LAYLINE_MARGIN : rel <= -(beat + LAYLINE_MARGIN);
+};
 
 interface Race { t0: number; attempts: number }
-const race = (c: LessonCtx): Race => mem(c, 'race', () => ({ t0: c.t, attempts: 1 }));
 
-/** Metres made good toward the mean wind from the start line (the origin). */
-function madeGood(s: SimSnapshot): number {
-  const up = fromDeg(TWD);
-  return s.boat.pos.x * Math.sin(up) + s.boat.pos.y * Math.cos(up);
+function startRace(c: LessonCtx): void {
+  c.app.scenario(RACE_START);
+  c.app.setMarks([MARK]);
 }
+
+/** The crew's race: the angle from the polar, tack on headers and on the layline, then straight for the mark. */
+function raceDemo(): Demo {
+  let sinceTack = 99;
+  let last = -1;
+  return (c) => {
+    const s = c.snap;
+    sinceTack += last < 0 ? 0 : Math.max(0, c.t - last);
+    last = c.t;
+    if (s.maneuver === 'tack') { sinceTack = 0; return; }
+    const beat = bestBeat(twsKn(s)).twa;
+    if (fetches(s, beat)) {
+      // On the layline: point straight at the mark while it is outside the no-go zone.
+      const m = toMark(s);
+      if (Math.abs(m.rel) >= beat - 2) holdHeading(c, m.bearing);
+      else holdTwa(c, beat);
+      return;
+    }
+    holdTwa(c, beat);
+    if (sinceTack > 15 && speedKn(s) > 3 && (pastLayline(s, beat) || liftDeg(s) < -HEADER)) c.app.controls.command = 'tack';
+  };
+}
+
+// ---- the lesson ------------------------------------------------------------------------------------------
 
 export const sailingSmart: Lesson = {
   id: 'sailing-smart',
   module: 'Tactics',
   title: 'Sailing smart',
-  summary: 'VMG and polars, gusts and lulls, lifts and headers — then race to a windward mark.',
+  summary: 'VMG and polars, gusts and lulls, lifts and headers, laylines — then a race to a windward mark.',
   setup: (c) => c.app.scenario(sailing({ twsKn: TWS, twdDeg: TWD, twa: 55 })),
   steps: [
     step({
@@ -84,8 +141,8 @@ export const sailingSmart: Lesson = {
     step({
       title: 'Downwind too',
       body: () => {
-        const here = optimalVmg(POLARS, TWS, false).twa;
-        const light = optimalVmg(POLARS, 6, false).twa;
+        const here = bestRun(TWS).twa;
+        const light = bestRun(6).twa;
         return here < 165
           ? `<p>The same idea works downwind. In ${TWS} knots the polar says the best downwind VMG comes at about ${fmt(here, 0)}° off the wind — not dead downwind. The broad reach is so much faster that gybing from one broad reach to the other beats running straight at the mark.</p>`
           : `<p>The same idea works downwind. In ${TWS} knots the polar puts the best downwind VMG close to dead downwind, at about ${fmt(here, 0)}°. In light air it moves up — about ${fmt(light, 0)}° in 6 knots — and gybing from one broad reach to the other beats running straight at the mark.</p>`;
@@ -97,64 +154,53 @@ export const sailingSmart: Lesson = {
     step({
       title: 'Gusts, lulls and shifts',
       body: `<p>Real wind is never steady. [[gust|Gusts]] come as darker patches on the water; in a gust the apparent wind moves aft and strengthens, so you can point a little higher — or [[depower]] if you are heeling too much. In a [[lull]], bear away a little to keep your speed up.</p>
-<p>The wind also swings from side to side. A [[lift-shift|lift]] lets you point closer to the mark; a [[header]] forces you away from it — and whatever heads you on one tack lifts you on the other. So tack on the headers. Keep away from the [[layline|laylines]] until you are close to the mark: out there you can no longer use the shifts.</p>`,
+<p>The wind also swings from side to side. A [[lift-shift|lift]] lets you point closer to the mark; a [[header]] forces you away from it — and whatever heads you on one tack lifts you on the other. So tack on the headers. The [[layline|laylines]] are the two lines from the mark on which you can just fetch it: tack onto one too early and you must tack again; go past it and every metre beyond is wasted. Keep away from them until you are close to the mark — out there you can no longer use the shifts.</p>`,
       camera: 'top',
       overlays: view('wheel', 'laylines'),
       controls: ['helm'],
     }),
     step({
       title: 'Race to the windward mark',
-      body: `<p>The wind is now gusty and shifting. The windward mark is ${RACE_DISTANCE} m straight upwind of your start — cross that line within ${RACE_TIME} seconds. Sail at your best VMG angle, ride the gusts, and tack (<kbd>T</kbd>) when a header knocks you off course. The clock starts now.</p>`,
+      body: `<p>The race: the orange windward mark is ${MARK_DISTANCE} m dead upwind of the start, and the wind is gusty and shifting. Reach it — within ${REACHED_M} m — in ${TARGET_TIME} seconds. The clock starts now.</p>
+<p>The autopilot holds your angle to the wind; your job is to decide when to tack (<kbd>T</kbd>). A mark dead upwind can't be reached on one tack. Each tack costs a few boat lengths, so tack on the big headers — 5° or more — not on every flicker, and tack for the mark when you reach the layline (the overlay shows them). If time runs out, you go back to the start for another try.</p>`,
       camera: 'chase',
       overlays: view('wheel', 'laylines', 'track'),
       controls: ['helm', 'manoeuvres', 'main', 'jib', 'crew'],
-      onEnter: (c) => c.app.scenario(RACE_SCENARIO),
+      onEnter: startRace,
+      tick: (c) => {
+        const r = mem<Race>(c, 'race', () => ({ t0: c.t, attempts: 1 }));
+        if (c.t - r.t0 > TARGET_TIME) {
+          startRace(c); // out of time: back to the start for another go
+          r.t0 = c.t;
+          r.attempts++;
+        }
+      },
       task: {
-        label: `Gain ${RACE_DISTANCE} m to windward within ${RACE_TIME} s`,
+        label: `Reach the windward mark (within ${REACHED_M} m) in ${TARGET_TIME} s`,
         check: (c) => {
-          const r = race(c);
-          const d = madeGood(c.snap);
-          if (d >= RACE_DISTANCE) return 1;
-          if (c.t - r.t0 > RACE_TIME) {
-            // Out of time: back to the start line for another go.
-            c.app.scenario(RACE_SCENARIO);
-            r.t0 = c.t;
-            r.attempts++;
-            return 0;
-          }
-          return Math.max(0, d / RACE_DISTANCE);
+          const d = toMark(c.snap).dist;
+          return d <= REACHED_M ? 1 : Math.max(0, 1 - d / MARK_DISTANCE);
         },
       },
       hint: (c) => {
         const s = c.snap;
         const r = peek<Race>(c, 'race');
         if (!r) return null;
-        const left = Math.max(0, RACE_TIME - (c.t - r.t0));
-        const togo = Math.max(0, RACE_DISTANCE - madeGood(s));
-        const status = `${fmt(togo, 0)} m to go, ${fmt(left, 0)} s left${r.attempts > 1 ? ` (attempt ${r.attempts})` : ''}.`;
+        const m = toMark(s);
+        const left = Math.max(0, TARGET_TIME - (c.t - r.t0));
+        const status = `${fmt(m.dist, 0)} m to the mark, ${fmt(left, 0)} s left${r.attempts > 1 ? ` (attempt ${r.attempts})` : ''}.`;
         if (s.maneuver === 'tack') return status;
-        const best = bestBeat(twsKn(s));
-        if (absTwa(s) > 60) return `${status} Head up to close-hauled with ${upKey(s)}.`;
-        if (liftDeg(s) < -HEADER) return `${status} You are headed by ${fmt(-liftDeg(s), 0)}° — tack now (T): the other tack is lifted.`;
-        if (absTwa(s) > best.twa + 5) return `${status} You are sailing low; head up toward ${fmt(best.twa, 0)}°.`;
-        if (speedKn(s) < 0.8 * best.speed) return `${status} Build speed: bear away a touch with ${downKey(s)}.`;
+        const beat = bestBeat(twsKn(s)).twa;
+        if (absTwa(s) > 70) return `${status} Head up to close-hauled with ${upKey(s)}.`;
+        if (fetches(s, beat)) return `${status} You can fetch the mark on this tack — sail straight for it.`;
+        if (pastLayline(s, beat)) return `${status} You are past the layline: tack now (T) and sail for the mark.`;
+        if (liftDeg(s) < -HEADER) return `${status} You are headed by ${fmt(-liftDeg(s), 0)}° — tack (T): the other tack is lifted.`;
+        if (absTwa(s) > beat + 5) return `${status} You are sailing low; head up toward ${fmt(beat, 0)}°.`;
         return status;
       },
       showMe: (c) => {
         Object.assign(c.app.controls.autoTrim, { main: true, jib: true });
-        let sinceTack = 99;
-        let last = c.t;
-        return (cc) => {
-          const s = cc.snap;
-          sinceTack += Math.max(0, cc.t - last);
-          last = cc.t;
-          if (s.maneuver !== null) return;
-          holdTwa(cc, bestBeat(twsKn(s)).twa);
-          if (liftDeg(s) < -HEADER && sinceTack > 15 && speedKn(s) > 3) {
-            cc.app.controls.command = 'tack';
-            sinceTack = 0;
-          }
-        };
+        return raceDemo();
       },
     }),
   ],
@@ -170,6 +216,12 @@ export const sailingSmart: Lesson = {
       options: ['It is headed too', 'It is lifted by 10° — time to tack', 'Nothing changes'],
       correct: 1,
       why: 'A shift that heads one tack lifts the other.',
+    },
+    {
+      q: 'You tack onto the layline far from the mark, and the wind heads you. What now?',
+      options: ['Nothing — you are on the layline', 'You can no longer fetch the mark and must tack again', 'Bear away to the mark'],
+      correct: 1,
+      why: 'Out on the layline a header puts the mark out of reach and a lift makes you overstand — that is why you stay off the laylines until you are close.',
     },
     {
       q: 'A gust hits you while sailing upwind. The apparent wind…',

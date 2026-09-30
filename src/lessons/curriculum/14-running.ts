@@ -1,16 +1,12 @@
 // Lesson 14 — Running and wing-on-wing (spec §11.2): blanketing, the by-the-lee danger, the whisker pole.
 // Task: 30 s dead downwind with the jib full.
 import type { SimSnapshot } from '../../sim/types';
+import { RHO_AIR } from '../../sim/sails/common';
 import type { Lesson } from '../types';
-import { absTwa, downKey, fmt, holdTwa, sailing, step, tackOf, trimOf, view } from './helpers';
+import { absTwa, byTheLee, downKey, fmt, holdTwa, sailing, step, tackOf, trimOf, view } from './helpers';
 
-const RHO_AIR = 1.225;
-
-/** The wind is on the same side as the boom: one step from an accidental gybe. */
-const byTheLee = (s: SimSnapshot): boolean => {
-  const boom = Math.sign(s.sails.main.boomAngle);
-  return boom !== 0 && boom !== tackOf(s);
-};
+/** A very broad reach, almost a run: where the lesson starts, and where the wing-on-wing task starts. */
+const BROAD_TWA = 158;
 
 /** The jib's clew is held out on the windward side, opposite the main. */
 const jibPoledOut = (s: SimSnapshot): boolean => {
@@ -41,12 +37,12 @@ export const running: Lesson = {
   module: 'Manoeuvres',
   title: 'Running and wing-on-wing',
   summary: 'Sailing dead downwind: the wind shadow, the danger of sailing by the lee, and the whisker pole.',
-  setup: (c) => c.app.scenario(sailing({ twsKn: 10, twa: 170 })),
+  setup: (c) => c.app.scenario(sailing({ twsKn: 10, twa: BROAD_TWA })),
   steps: [
     step({
       title: 'Running',
-      body: `<p>On a [[run]] the wind comes from behind. The sails no longer work as wings: the air hits them and they are pushed along, like a parachute. The boat also runs away from her own wind, so the apparent wind is light and the ride feels calm.</p>
-<p>Look at the jib. It hangs limp in the mainsail's wind shadow — the main is [[blanketing]] it — so almost half of your sail area is doing very little. The flow streaks show the slow, stirred-up air behind the main.</p>`,
+      body: `<p>You are on a very broad reach, the wind almost behind you; a little further and you would be on a [[run]]. Down here the sails no longer work as wings: the air hits them and they are pushed along, like a parachute. The boat also runs away from her own wind, so the apparent wind is light and the ride feels calm.</p>
+<p>Look at the jib. It hangs half-limp in the mainsail's wind shadow — the main is [[blanketing]] it — and dead downwind it would collapse completely, so almost half of your sail area does very little. The flow streaks show the slow, stirred-up air behind the main.</p>`,
       camera: 'chase',
       overlays: view('flow'),
       controls: ['helm'],
@@ -76,10 +72,12 @@ export const running: Lesson = {
     }),
     step({
       title: 'Wing-on-wing',
-      body: `<p>Now both sails catch the wind: the main out on one side, the jib poled out on the other, and the jib fills with air. Steer as close to dead downwind as you safely can — a true wind angle of 165–180°, never by the lee — and hold it for 30 seconds.</p>`,
+      body: `<p>Now both sails catch the wind: the main out on one side, the jib poled out on the other. The autopilot still holds the broad reach; steer down yourself — <kbd>←</kbd>/<kbd>→</kbd> turn the bow, or take the tiller — to as close to dead downwind as you safely can: a true wind angle of 165–180°, never by the lee. Hold it for 30 seconds with the jib full.</p>`,
       camera: 'chase',
       overlays: view('flow', 'wheel'),
       controls: ['helm', 'jibWhisker'],
+      // The task starts from the broad reach, whether or not the learner has already been down to a run.
+      onEnter: (c) => holdTwa(c, BROAD_TWA),
       task: {
         label: 'Dead downwind (165–180°, not by the lee) with the jib full, for 30 s',
         holdSeconds: 30,

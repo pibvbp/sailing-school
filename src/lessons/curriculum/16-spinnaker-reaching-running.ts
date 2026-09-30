@@ -12,15 +12,26 @@ const LEGS: readonly Leg[] = [
   { name: 'broad reach', lo: 115, hi: 140, hold: 5, steer: 128 },
 ];
 
-interface Progress { leg: number; held: number; collapses: number }
-const progress = (c: LessonCtx): Progress => mem(c, 'legs', () => ({ leg: 0, held: 0, collapses: 0 }));
+interface Progress { leg: number; held: number }
+const progress = (c: LessonCtx): Progress => mem(c, 'legs', () => ({ leg: 0, held: 0 }));
+
+/** 10 kn on a broad reach, spinnaker up and trimmed (the crew's steady trim), the crew flying it. */
+const CALM = sailing({
+  twsKn: 10, twa: 125, spinnaker: true,
+  controls: { spinSheet: 0.69, spinPole: 0.03, autoTrim: autoTrim(true, true, true) },
+});
+/** 20 kn, a reach, the spinnaker over-trimmed with the pole forward: she will broach. */
+const BROACH = sailing({
+  twsKn: 20, twa: 105, spinnaker: true, speedKn: 6,
+  controls: { mainSheet: 0.9, spinSheet: 0.85, spinPole: 0.1, autoTrim: autoTrim(false, true, false) },
+});
 
 export const spinnakerReachingRunning: Lesson = {
   id: 'spinnaker-reaching-running',
   module: 'Spinnaker',
   title: 'Spinnaker: reaching to running',
   summary: 'Keep the spinnaker flying while you change course — and learn why it can knock you flat on a windy reach.',
-  setup: (c) => c.app.scenario(sailing({ twsKn: 10, twa: 125, spinnaker: true, controls: { autoTrim: autoTrim(true, true, true) } })),
+  setup: (c) => c.app.scenario(CALM),
   steps: [
     step({
       title: 'Changing course under spinnaker',
@@ -48,7 +59,6 @@ export const spinnakerReachingRunning: Lesson = {
           const dt = frameDt(c, 'legDt');
           const kite = kiteOf(s);
           if (hasEvent(s, 'spinCollapse') || kite.collapsed > 0.5) {
-            if (p.leg > 0 || p.held > 0) p.collapses++;
             p.leg = 0;
             p.held = 0;
           }
@@ -98,10 +108,9 @@ export const spinnakerReachingRunning: Lesson = {
       camera: 'chase',
       overlays: view('forces'),
       controls: [],
-      onEnter: (c) => c.app.scenario(sailing({
-        twsKn: 20, twa: 105, spinnaker: true, speedKn: 6,
-        controls: { mainSheet: 0.9, spinSheet: 0.85, spinPole: 0.1, autoTrim: autoTrim(false, true, false) },
-      })),
+      onEnter: (c) => c.app.scenario(BROACH),
+      // Leaving the demonstration — forward, or Back to the task — brings the calm breeze back.
+      onExit: (c) => c.app.scenario(CALM),
       hint: (c) => (hasEvent(c.snap, 'roundUp') ? 'There it goes: too much heel, and the rudder lost its grip.' : null),
     }),
     step({
@@ -109,7 +118,6 @@ export const spinnakerReachingRunning: Lesson = {
       body: `<p>To keep a spinnaker under control in a breeze: ease the spinnaker sheet and the mainsheet the moment a gust heels you; bear away with the gust rather than fighting it; keep the boat as upright as you can; and do not carry the spinnaker too close to the wind. If the wind is getting too strong, [[douse]] it early — the next lesson shows how.</p>`,
       camera: 'chase',
       overlays: view(),
-      onEnter: (c) => c.app.scenario(sailing({ twsKn: 10, twa: 135, spinnaker: true, controls: { autoTrim: autoTrim(true, true, true) } })),
     }),
   ],
   quiz: [

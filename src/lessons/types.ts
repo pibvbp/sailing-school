@@ -18,6 +18,9 @@ export const OVERLAY_KEYS: readonly OverlayKey[] = [
 ];
 
 /** What the UI, the input controller and lessons may ask of the App. `controls` is read fresh every time. */
+/** A race mark placed by a lesson or mode (world metres east / north of the scenario origin). */
+export interface MarkSpec { id: string; e: number; n: number; kind: 'windward' | 'leeward' | 'start' }
+
 export interface AppApi {
   setMode(m: AppMode): void;
   setCamera(c: CameraKey): void;
@@ -31,6 +34,8 @@ export interface AppApi {
   setSound(on: boolean): void;
   scenario(init: ScenarioInit): void;
   startLesson(id: string): void;
+  /** Replaces the course marks shown on the water (an empty list clears them). */
+  setMarks(marks: readonly MarkSpec[]): void;
   controls: Controls;
 }
 
@@ -107,6 +112,11 @@ export interface Step {
   autoTrim?: Partial<Controls['autoTrim']>;
   /** "Show me": run the auto-crew / autopilot for this step (spec §11.1). The button shows only if present. */
   showMe?(c: LessonCtx): void;
+  /**
+   * Runs every frame while the step is active (from its second frame on, like the task check) until its task
+   * succeeds: multi-phase "Show me" demonstrations, timers, scenario resets. Not called while paused.
+   */
+  tick?(c: LessonCtx): void;
   onEnter?(c: LessonCtx): void;
   onExit?(c: LessonCtx): void;
 }

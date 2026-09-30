@@ -412,7 +412,7 @@ export const demoLessons: Lesson[] = [
     steps: [
       {
         title: 'Close-hauled',
-        body: '<p>Sailing as close to the wind as the boat can go is called [[close-hauled]]. Sheet the sails in hard and steer so the [[telltale|telltales]] on the jib both stream back.</p><p>Too close and you stall into the [[no-go-zone]]; too far off and you lose ground upwind.</p>',
+        body: '<p>Sailing as close to the wind as the boat can go is called [[close-hauled]]. Sheet the sails in hard and steer so the [[telltale|telltales]] on the jib both stream back.</p><p>Steer too close and the sails luff as you slide into the [[no-go-zone]]; too far off and you lose ground upwind.</p>',
         camera: 'chase',
         overlays: { wheel: true },
         controls: ['helm', 'manoeuvres'],
@@ -496,11 +496,11 @@ export const demoLessons: Lesson[] = [
   stub('main-and-jib', 'How a sail works', 'Main and jib together', 'Upwash, downwash and backwinding — why the "venturi" story is wrong.'),
   stub('keel-and-balance', 'Boat handling', 'Keel, leeway and balance', 'Keel lift, heeling vs righting moment and weather helm.'),
   stub('tacking', 'Boat handling', 'Tacking', 'The sequence and the calls; keeping momentum.'),
-  stub('getting-out-of-irons', 'Boat handling', 'Getting out of irons', 'Back the jib, push the boom, reverse steering.'),
+  stub('out-of-irons', 'Boat handling', 'Getting out of irons', 'Back the jib, push the boom, reverse steering.'),
   stub('gybing', 'Boat handling', 'Gybing', 'Controlled versus accidental gybes.'),
   stub('running', 'Boat handling', 'Running and wing-on-wing', 'Blanketing, by-the-lee danger and the whisker pole.'),
-  stub('spinnaker-hoist', 'Spinnaker', 'Spinnaker: hoist and trim', 'Pole square to the apparent wind; ease to the curl.'),
-  stub('spinnaker-reaching', 'Spinnaker', 'Spinnaker: reaching to running', 'Pole and sheet through course changes.'),
-  stub('spinnaker-gybe', 'Spinnaker', 'Spinnaker gybe and douse', 'Gybe with the kite up, then douse before heading up.'),
+  stub('spinnaker-basics', 'Spinnaker', 'Spinnaker: hoist and trim', 'Pole square to the apparent wind; ease to the curl.'),
+  stub('spinnaker-reaching-running', 'Spinnaker', 'Spinnaker: reaching to running', 'Pole and sheet through course changes.'),
+  stub('spinnaker-gybe-douse', 'Spinnaker', 'Spinnaker gybe and douse', 'Gybe with the kite up, then douse before heading up.'),
   stub('sailing-smart', 'Racing', 'Sailing smart', 'VMG and polars, laylines, gusts, lifts and headers.'),
 ];

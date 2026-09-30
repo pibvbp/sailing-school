@@ -64,7 +64,7 @@ export const sailIsAWing: Lesson = {
     }),
     step({
       title: 'Too big: stall',
-      body: `<p>Now pull the sail in hard with <kbd>W</kbd>. Past about 17° the air can no longer follow the curved lee side: it breaks away into a swirling wake behind the sail. That is a [[stall]]. Lift drops, drag soars, and the telltales on the [[leech]] disappear behind the sail.</p>`,
+      body: `<p>Now pull the sail in hard with <kbd>W</kbd>. Past about 18° the air can no longer follow the curved lee side: it breaks away into a swirling wake behind the sail. That is a [[stall]]. Lift drops, drag soars, and the telltales on the [[leech]] disappear behind the sail.</p>`,
       camera: 'top',
       overlays: view('flow', 'flowSlice', 'forces', 'aoa'),
       controls: ['mainSheet'],
@@ -75,7 +75,7 @@ export const sailIsAWing: Lesson = {
       },
       hint: (c) => {
         const t = trimOf(c.snap.sails.main);
-        return t.stall >= 0.6 ? null : `Trim harder with W: the angle of attack is ${fmt(t.aoa, 0)}°, and the flow starts to separate above about 17°.`;
+        return t.stall >= 0.6 ? null : `Trim harder with W: the angle of attack is ${fmt(t.aoa, 0)}°, and the flow separates beyond about 18°.`;
       },
       showMe: (c) => {
         c.app.controls.autoTrim.main = false;
@@ -85,7 +85,7 @@ export const sailIsAWing: Lesson = {
     step({
       title: 'Maximum drive',
       body: `<p>Between the two is the [[groove]]. A sail pulls hardest near the top of it: the biggest angle of attack at which the air still flows smoothly round the lee side.</p>
-<p>Ease slowly out of the stall with <kbd>S</kbd> until the groove meter turns green and the leech telltales stream, then trim back in just a touch. Watch the green drive arrow: it is longest at an angle of attack of about ${MAX_DRIVE_AOA[0]}–${MAX_DRIVE_AOA[1]}°. Hold <kbd>Shift</kbd> for fine trim.</p>`,
+<p>Ease slowly out of the stall with <kbd>S</kbd> until the groove meter turns green and the leech telltales stream — that is the top of the groove. Watch the green drive arrow: it is longest at an angle of attack of about ${MAX_DRIVE_AOA[0]}–${MAX_DRIVE_AOA[1]}°. Hold <kbd>Shift</kbd> for fine trim.</p>`,
       camera: 'top',
       overlays: view('flow', 'flowSlice', 'forces', 'aoa'),
       controls: ['mainSheet'],
@@ -104,7 +104,7 @@ export const sailIsAWing: Lesson = {
     }),
     step({
       title: 'What you found',
-      body: `<p>Too small an angle of attack and a sail luffs; too big and it stalls. In this simulator the mainsail and the jib luff below about 5°, pull hardest at about 13–17°, and start to stall at about 17–18°.</p>
+      body: `<p>Too small an angle of attack and a sail luffs; too big and it stalls. In this simulator the mainsail luffs below about 5°, pulls hardest at about ${MAX_DRIVE_AOA[0]}–${MAX_DRIVE_AOA[1]}° and stalls beyond that. The jib, which you trim in lesson 7, behaves the same way.</p>
 <p>Real sails behave the same way, which is why sailors trim all the time: every change of course, speed or wind changes the angle of attack.</p>`,
       camera: 'top',
       overlays: view('flow', 'forces', 'aoa'),

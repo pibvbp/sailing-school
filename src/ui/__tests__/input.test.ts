@@ -59,6 +59,7 @@ function mockApp(): MockApp {
     setSound: () => {},
     scenario: () => {},
     startLesson: () => {},
+    setMarks: () => {},
   };
 }
 
@@ -406,6 +407,18 @@ describe('InputController: dialogs, stuck keys, locked controls', () => {
     down('w');
     run(1);
     expect(app.controls.mainSheet).toBeCloseTo(1, 5);
+  });
+
+  it('holding ? does not toggle the dialog closed again on auto-repeat', () => {
+    down('?', { shiftKey: true }); // not suspended yet: opens help
+    input.setSuspended(true); // the dialog opened
+    down('?', { shiftKey: true, repeat: true });
+    down('?', { shiftKey: true, repeat: true });
+    down('Escape', { repeat: true });
+    expect(log).toEqual(['help']);
+    up('?', { shiftKey: true });
+    down('?', { shiftKey: true }); // a fresh press closes it
+    expect(log).toEqual(['help', 'help']);
   });
 
   it('a key pressed with ⌘ (or whose keyup is swallowed) cannot stay stuck', () => {

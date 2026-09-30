@@ -1,7 +1,9 @@
 // Lesson 2 — Finding the wind (spec §11.2): reading the water, clouds, flags and the windex; head to wind;
 // the no-go zone.
 import type { Lesson } from '../types';
-import { absTwa, downKey, fmt, holdTwa, manualHelm, sailAway, sailing, speedKn, step, trimOf, twaDeg, upKey, view } from './helpers';
+import {
+  absTwa, downKey, fmt, holdTwa, manualHelm, mem, peek, sailAway, sailing, speedKn, steeringOnto, step, tackOf, trimOf, twaDeg, upKey, view,
+} from './helpers';
 
 export const findingTheWind: Lesson = {
   id: 'finding-the-wind',
@@ -45,30 +47,38 @@ export const findingTheWind: Lesson = {
         const a = absTwa(s);
         if (a < 10) return null;
         const side = twaDeg(s) > 0 ? 'starboard' : 'port';
-        if (speedKn(s) < 0.4 && a < 30) return 'You have almost stopped, so the rudder has little grip. Hold the tiller over and let the wind swing the bow, or press Show me.';
+        if (speedKn(s) < 0.4 && a < 30) return 'You have almost stopped, so the rudder has no grip — and a stopped boat’s bow blows away from the wind, not toward it. Bear away a little, let her pick up speed, then turn up smoothly so her way carries the bow the last few degrees into the wind — or press Show me.';
         return `The wind is still ${fmt(a, 0)}° off the bow on the ${side} side. Keep turning toward it with ${upKey(s)}, then centre the tiller as the sails start to flap.`;
       },
       showMe: (c) => holdTwa(c, 0),
     }),
     step({
       title: 'Bear away until the sails fill',
-      body: `<p>Pointing into the wind you are losing speed and will soon drift backwards. Turn away from the wind — [[bearing-away|bear away]] — to either side, until the sails stop flapping and fill, and the boat speeds up again.</p>
-<p>The crew trims the sails for you as soon as they can draw.</p>`,
+      body: `<p>Pointing into the wind you are losing speed and will soon drift backwards. Choose a side and turn away from the wind — [[bearing-away|bear away]] — until the sails stop flapping and fill, and the boat speeds up again: <kbd>←</kbd> swings the bow to port, so the wind ends up on your starboard side; <kbd>→</kbd> the other way.</p>
+<p>Left alone, a stopped boat does fall off by herself in the end — but slowly, drifting backwards, on whichever side the wind pushes her. A sailor chooses. The crew trims the sails for you as soon as they can draw.</p>`,
       camera: 'chase',
       overlays: view('wheel'),
       controls: ['helm', 'jibBacked'],
       onEnter: manualHelm,
       task: {
-        label: 'Bear away out of the no-go zone until the sails fill and you reach 2.5 kn',
+        label: 'Steer onto the tack of your choice until the sails fill and you reach 2.5 kn',
         holdSeconds: 3,
         check: (c) => {
           const s = c.snap;
-          return absTwa(s) >= 50 && speedKn(s) >= 2.5 && trimOf(s.sails.main).luffing <= 0.35 && trimOf(s.sails.jib).luffing <= 0.35;
+          const onto = steeringOnto(c);
+          const chosen = mem(c, 'chosen', () => ({ stbd: false, port: false }));
+          if (onto > 0) chosen.stbd = true;
+          if (onto < 0) chosen.port = true;
+          const onChosenTack = tackOf(s) > 0 ? chosen.stbd : chosen.port;
+          return onChosenTack && absTwa(s) >= 50 && speedKn(s) >= 2.5
+            && trimOf(s.sails.main).luffing <= 0.35 && trimOf(s.sails.jib).luffing <= 0.35;
         },
       },
       hint: (c) => {
         const s = c.snap;
         const a = absTwa(s);
+        const chosen = peek<{ stbd: boolean; port: boolean }>(c, 'chosen');
+        if (!chosen?.stbd && !chosen?.port) return 'Choose a side and steer: hold ← to swing the bow to port (the wind ends up on your starboard side) or → for the other side.';
         if (a < 30 && speedKn(s) < 0.4) return 'You are stuck head to wind — [[in-irons]]. Switch on Back jib in the trim panel: the wind pushes the jib and swings the bow off. Lesson 12 covers this in detail.';
         if (a < 50) return `Keep turning away from the wind with ${downKey(s)} — the sails cannot fill inside the no-go zone.`;
         if (speedKn(s) < 2.5) return 'Good angle. Hold your course while the boat picks up speed.';

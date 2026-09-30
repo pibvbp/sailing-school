@@ -71,10 +71,17 @@ export const mainAndJib: Lesson = {
     }),
     step({
       title: 'Fix it',
-      body: `<p>Fix it the way a crew does: ease the jib a touch (<kbd>↓</kbd>) until its telltales stream, then trim the main (<kbd>W</kbd>) until its luff is full and the sail is in the groove. Trim the jib first, then set the main to match it.</p>`,
+      body: `<p>The jib is pulled in hard and the main is eased, so the main's luff is lifting. Fix it the way a crew does: ease the jib a touch (<kbd>↓</kbd>) until its telltales stream, then trim the main (<kbd>W</kbd>) until its luff is full and the sail is in the groove. Trim the jib first, then set the main to match it.</p>`,
       camera: 'top',
       overlays: view('flow', 'flowSlice', 'aoa'),
       controls: ['mainSheet', 'jibSheet', 'autoTrim'],
+      // Start from the broken trim, whether or not the step before was done.
+      onEnter: (c) => {
+        const k = c.app.controls;
+        Object.assign(k.autoTrim, { main: false, jib: false });
+        k.jibSheet = 1;
+        k.mainSheet = Math.min(k.mainSheet, 0.6);
+      },
       task: {
         label: 'Main luff full and both sails in the groove, for 4 s',
         holdSeconds: 4,

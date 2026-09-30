@@ -1,7 +1,8 @@
 // Lesson runner (spec §11.1). Pure logic — no DOM: the panel is any `LessonView`.
 //  • start(id) runs the lesson's setup, then enters step 0 (camera, overlays, auto-trim, live controls, onEnter).
-//  • update(snap, dt) evaluates the active task every frame; the check must hold for `holdSeconds` of
-//    simulated time (paused = no progress), then the step is marked done and advances after a short pause.
+//  • update(snap, dt) runs the active step's `tick` and evaluates its task every frame; the check must hold for
+//    `holdSeconds` of simulated time (paused = no progress), then the step is marked done and advances after a
+//    short pause. `tick` stops once the task has succeeded.
 //  • Hints: shown on request, after `hintAfter` simulated seconds without progress, or at once when the sim
 //    reports a mistake event (crash gybe, in irons, …). While shown they are re-evaluated once a second.
 //  • Quiz after the last step; completion and best quiz scores persist in localStorage (all access in try/catch).
@@ -225,6 +226,7 @@ export class LessonRunner {
       if (this.advanceTimer >= this.advanceDelay) this.next();
       return;
     }
+    if (step.tick && this.framesInStep >= 2 && simDt > 0) this.safely(() => step.tick!(this.ctx));
     if (step.task) this.evaluate(step, simDt);
     this.tickHint(step, dt, simDt);
   }
@@ -298,6 +300,7 @@ export class LessonRunner {
   exit(): void {
     this.pending = null;
     this.leaveStep();
+    if (this.lesson) this.app.setMarks([]);
     this.lesson = null;
     this.phase = 'idle';
     this.live = null;
@@ -323,6 +326,7 @@ export class LessonRunner {
     this.quizCorrect = 0;
     this.quizAnswer = null;
     this.store.setLast(id);
+    this.app.setMarks([]);
     this.safely(() => lesson.setup(this.ctx));
     if (lesson.steps.length === 0) {
       this.afterSteps();

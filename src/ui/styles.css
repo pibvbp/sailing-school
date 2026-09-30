@@ -6,8 +6,9 @@
 .sx-root {
   --sx-ink: var(--ink, #f4f7fb);
   --sx-dim: var(--ink-dim, #b8c6d6);
-  /* Small caps labels over a bright sky: ≈ .85 alpha keeps them ≥ 4.5:1 on the panel glass. */
-  --sx-faint: rgba(200, 214, 230, 0.86);
+  /* Small caps labels. WCAG ratios, label over the glass top (.78) over the backdrop (computed, not measured):
+     pure white 5.1:1, near-white sky 5.4, bright sky 5.9, sea 9.6; --sx-dim body text 4.6:1 on pure white. */
+  --sx-faint: rgba(205, 218, 232, 0.92);
   --sx-edge: var(--panel-edge, rgba(255, 255, 255, 0.12));
   --sx-accent: var(--accent, #ff7a1a);
   --sx-port: var(--port, #e5484d);
@@ -17,8 +18,8 @@
   --sx-luff: #4aa8ff;
   --sx-ok: #34c77b;
   --sx-stall: #ff5a4f;
-  --sx-glass-a: rgba(15, 33, 55, 0.66);
-  --sx-glass-b: rgba(6, 16, 30, 0.72);
+  --sx-glass-a: rgba(15, 33, 55, 0.78);
+  --sx-glass-b: rgba(6, 16, 30, 0.8);
   --sx-r: 14px;
   --sx-gap: 12px;
   --sx-top-h: 44px;
@@ -419,12 +420,13 @@
 .sx-cluster {
   /* Centred on the screen when it fits; otherwise slid left just enough to clear the view block (review I-5). */
   position: fixed; bottom: 12px; z-index: 15; transform: translateX(-50%);
-  left: min(50%, calc(100% - var(--sx-view-w) - 24px - var(--sx-cluster-w) / 2));
+  /* …and never past the left edge (the breakpoints below switch tile sizes before this bound has to bite). */
+  left: max(calc(var(--sx-cluster-w) / 2 + 8px), min(50%, calc(100% - var(--sx-view-w) - 24px - var(--sx-cluster-w) / 2)));
   display: flex; align-items: flex-end; gap: 6px;
 }
 .sx-cells {
   display: flex; align-items: stretch; height: var(--sx-cells-h); border-radius: var(--sx-r); overflow: hidden;
-  background: linear-gradient(180deg, rgba(12, 28, 48, 0.72), rgba(4, 12, 24, 0.8));
+  background: linear-gradient(180deg, rgba(12, 28, 48, 0.78), rgba(4, 12, 24, 0.84));
   -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
   border: 1px solid var(--sx-edge); box-shadow: 0 14px 36px rgba(0, 7, 18, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
@@ -487,8 +489,9 @@
 .sx-dial-sub { font-size: 10.5px; fill: var(--sx-dim); text-anchor: middle; font-variant-numeric: tabular-nums; }
 .sx-dial-unit { font-size: 9px; }
 .sx-dial-caption {
-  position: absolute; left: 50%; top: -20px; transform: translateX(-50%); display: flex; gap: 10px; white-space: nowrap;
-  font-size: 9.5px; font-weight: 750; letter-spacing: 0.1em; color: var(--sx-dim); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  position: absolute; left: 50%; top: -24px; transform: translateX(-50%); display: flex; gap: 10px; white-space: nowrap;
+  padding: 2px 9px; border-radius: 9px; background: rgba(6, 16, 30, 0.8); /* drawn over the scene: needs its own backing */
+  font-size: 9.5px; font-weight: 750; letter-spacing: 0.1em; color: var(--sx-dim);
 }
 .sx-dial-key { display: inline-flex; align-items: center; gap: 4px; }
 .sx-dial-key::before { content: ""; display: inline-block; }
@@ -582,6 +585,7 @@
 .sx-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 6px 22px; }
 .sx-modal-title { font-size: 18px; font-weight: 700; margin: 0; }
 .sx-modal-body { overflow-y: auto; padding: 8px 22px 20px; scrollbar-width: thin; }
+.sx-modal-body:focus { outline: none; } /* focused on open so the keys scroll it; the dialog itself shows where focus is */
 .sx-set-grid, .sx-help-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; }
 .sx-set-col { display: flex; flex-direction: column; }
 .sx-set { margin-bottom: 18px; }
@@ -636,14 +640,16 @@
   .sx-cams { display: flex; flex: 1; }
   .sx-cams .sx-seg-btn { flex: 1; padding: 5px 4px; font-size: 11.5px; }
 }
-@media (max-width: 1180px) {
+/* Full tiles need W − view block − cluster ≥ 8 px margin: W ≥ 1198 px. */
+@media (max-width: 1199px) {
   .sx-root { --sx-right-w: 272px; --sx-cell-w: 76px; --sx-bsp-w: 88px; --sx-duo-w: 106px; --sx-dial: 144px; }
   .sx-cell { padding: 8px 9px 7px; }
   .sx-cell-value { font-size: 22px; }
   .sx-duo .sx-v { font-size: 17px; }
   .sx-chip-sub { display: none; }
 }
-@media (max-width: 1080px) {
+/* Smaller tiles need W ≥ 1098 px; below that leeway and rudder move to the Helm read-outs only. */
+@media (max-width: 1099px) {
   /* Leeway and rudder angle stay visible in the trim panel's Helm read-outs. */
   .sx-root { --sx-cells-n: 3; --sx-left-w: 300px; }
   .sx-cell[data-k="lwy"], .sx-cell[data-k="rud"] { display: none; }
@@ -784,25 +790,33 @@
    panel buttons right), a short instrument row above it, short sheet sliders bottom-right, the dial top-right,
    the lesson peek folded into the top bar, and panels opening as side sheets on the left. */
 @media (max-width: 900px) and (max-height: 520px) {
-  .sx-root { --sx-top-h: 38px; --sx-nav-h: 42px; --sx-helm-h: 42px; --sx-cells-h: 46px; --sx-dial: 92px; --sx-nav-w: 264px; --sx-side-w: min(360px, 46vw); }
-  .sx-top { top: 6px; left: 8px; right: 8px; justify-content: flex-start; }
+  .sx-root {
+    --sx-top-h: 38px; --sx-nav-h: 42px; --sx-helm-h: 42px; --sx-cells-h: 46px; --sx-dial: 92px; --sx-nav-w: 264px;
+    /* Notched phones (viewport-fit=cover): keep everything clear of the side insets. */
+    --sx-il: env(safe-area-inset-left, 0px); --sx-ir: env(safe-area-inset-right, 0px);
+    --sx-side-w: calc(min(360px, 46vw) + var(--sx-il));
+  }
+  .sx-top { top: 6px; left: calc(8px + var(--sx-il)); right: calc(8px + var(--sx-ir)); justify-content: flex-start; }
   .sx-top-group { padding: 3px; }
   .sx-top-group.is-sim { margin-left: auto; }
   .sx-top-menu.sx-btn--icon { width: 38px; height: 38px; }
   .sx-chip { height: 30px; }
   .sx-mode .sx-seg-btn { padding: 5px 9px; }
 
-  .sx-mnav { left: auto; right: 8px; width: var(--sx-nav-w); bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
+  .sx-mnav { left: auto; right: calc(8px + var(--sx-ir)); width: var(--sx-nav-w); bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
   .sx-mnav-btn { font-size: 12px; gap: 5px; padding: 0 6px; }
   .sx-touch-helm {
-    right: calc(8px + var(--sx-nav-w) + 8px); bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    left: calc(8px + var(--sx-il)); right: calc(8px + var(--sx-nav-w) + 8px + var(--sx-ir)); bottom: calc(6px + env(safe-area-inset-bottom, 0px));
     height: var(--sx-helm-h); padding: 3px 4px 3px 12px;
   }
   .sx-touch-helm .sx-slider-ends { display: none; }
   .sx-touch-helm .sx-range { height: 30px; }
   .sx-touch-btns .sx-btn { height: 34px; padding: 0 10px; }
 
-  .sx-cluster { right: auto; width: min(440px, calc(100vw - 16px - 118px)); bottom: calc(6px + var(--sx-helm-h) + 6px + env(safe-area-inset-bottom, 0px)); }
+  .sx-cluster {
+    left: calc(8px + var(--sx-il)); right: auto; width: min(440px, calc(100vw - 16px - 118px - var(--sx-il) - var(--sx-ir)));
+    bottom: calc(6px + var(--sx-helm-h) + 6px + env(safe-area-inset-bottom, 0px));
+  }
   .sx-cell-value { font-size: 16px; }
   .sx-cell.is-dual { padding-top: 4px; padding-bottom: 4px; gap: 0; }
   .sx-duo { line-height: 1.02; }
@@ -812,15 +826,15 @@
   .sx-cells.is-left { flex: 3 1 0; }
   .sx-cells.is-right { flex: 1 1 0; }
 
-  .sx-touch-sheets { bottom: calc(6px + var(--sx-nav-h) + 6px + env(safe-area-inset-bottom, 0px)); padding: 6px 4px 4px; }
+  .sx-touch-sheets { right: calc(8px + var(--sx-ir)); bottom: calc(6px + var(--sx-nav-h) + 6px + env(safe-area-inset-bottom, 0px)); padding: 6px 4px 4px; }
   .sx-touch-sheets .sx-slider { width: 40px; }
   .sx-range.is-vertical { width: 30px; height: 84px; }
   .sx-range.is-vertical::-webkit-slider-thumb { width: 22px; height: 22px; margin-left: -8px; }
 
-  .sx-dial-slot { top: calc(6px + var(--sx-top-h) + 6px); }
+  .sx-dial-slot { top: calc(6px + var(--sx-top-h) + 6px); right: calc(8px + var(--sx-ir)); }
   .sx-dial-caption { display: none; }
   .sx-peek {
-    top: 6px; left: 214px; right: 150px; height: var(--sx-top-h); padding: 4px 10px 5px;
+    top: 6px; left: calc(214px + var(--sx-il)); right: calc(150px + var(--sx-ir)); height: var(--sx-top-h); padding: 4px 10px 5px;
     display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title top" "bar bar"; align-content: center; column-gap: 10px; row-gap: 3px;
   }
   .sx-peek-top { grid-area: top; }
@@ -831,16 +845,17 @@
   .sx-root .sx-dock {
     top: 0; bottom: 0; left: 0; right: auto; width: var(--sx-side-w); height: auto; max-height: none;
     border-radius: 0 18px 18px 0; border-left: 0; border-bottom: 1px solid var(--sx-edge);
-    padding-bottom: env(safe-area-inset-bottom, 0px); transform: translateX(-105%);
+    padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: var(--sx-il); transform: translateX(-105%);
   }
   .sx-root .sx-dock-left, .sx-root .sx-dock-right { height: auto; }
   .sx-sheet-grip { display: none; }
   .sx-sheet-head { padding: 10px 12px 2px 16px; }
 
   .sx-pill { top: calc(6px + var(--sx-top-h) + 8px); }
-  .sx-toasts { top: calc(6px + var(--sx-top-h) + 8px); left: auto; right: calc(8px + var(--sx-dial) + 8px); transform: none; width: min(340px, 52vw); }
-  .sx-pip { top: calc(6px + var(--sx-top-h) + 6px); right: calc(8px + var(--sx-dial) + 8px); width: 150px; height: 94px; }
-  .sx-polar { top: 6px; bottom: 6px; left: auto; right: 8px; margin: 0; width: 220px; overflow-y: auto; }
+  .sx-toasts { top: calc(6px + var(--sx-top-h) + 8px); left: auto; right: calc(8px + var(--sx-dial) + 8px + var(--sx-ir)); transform: none; width: min(340px, 52vw); }
+  .sx-pip { top: calc(6px + var(--sx-top-h) + 6px); right: calc(8px + var(--sx-dial) + 8px + var(--sx-ir)); width: 150px; height: 94px; }
+  .sx-polar { top: 6px; bottom: 6px; left: auto; right: calc(8px + var(--sx-ir)); margin: 0; width: 220px; overflow-y: auto; }
+  .sx-modal { padding-left: var(--sx-il); padding-right: var(--sx-ir); }
   .sx-polar-canvas { width: 150px; height: 218px; }
   .sx-modal-card { max-height: 100vh; border-radius: 16px 16px 0 0; }
 }

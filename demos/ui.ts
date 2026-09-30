@@ -68,6 +68,8 @@ class MockApp implements AppApi {
     this.hud?.syncState({ mode: 'lessons' });
     this.runner?.start(id);
   }
+
+  setMarks(): void {}
 }
 
 // ---- placeholder boat (so the glass panels sit over a real-looking scene) ---------------------------
