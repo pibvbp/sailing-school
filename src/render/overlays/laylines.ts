@@ -40,6 +40,9 @@ export class Laylines {
   private marks: Mark[] = [];
   private twd = NaN;
   private leeway = DEFAULT_LEEWAY;
+  private vmgTws = -1;
+  private beat = 40 * DEG;
+  private run = 150 * DEG;
   private readonly buf = new Float32Array(3 * 12);
   private readonly alphas = new Float32Array(12);
   private readonly labels: Label[] = [];
@@ -62,9 +65,14 @@ export class Laylines {
     if (Math.abs(s.wind.twa) < 60 * DEG && s.boat.speed > 1) {
       this.leeway += (Math.abs(s.boat.leeway) - this.leeway) * Math.min(1, dt / 8);
     }
+    // Best VMG angles from the polars, looked up again only when the wind speed has changed noticeably.
     const twsKn = s.wind.tws / KN;
-    const beat = optimalVmg(TABLE, twsKn, true).twa * DEG;
-    const run = optimalVmg(TABLE, twsKn, false).twa * DEG;
+    if (Math.abs(twsKn - this.vmgTws) > 0.05) {
+      this.vmgTws = twsKn;
+      this.beat = optimalVmg(TABLE, twsKn, true).twa * DEG;
+      this.run = optimalVmg(TABLE, twsKn, false).twa * DEG;
+    }
+    const beat = this.beat, run = this.run;
     let li = 0;
     // Only the leg being sailed: windward-mark laylines on a beat, leeward-mark (gybing) laylines downwind.
     const beating = Math.abs(s.wind.twa) < 90 * DEG;

@@ -7,6 +7,23 @@
 // becomes the physics symbol ⊙ (toward you) or ⊗ (away). Depth: a first pass draws what is visible, a second pass
 // (depthFunc Greater) draws the hidden parts faintly — forces under water or behind a sail stay readable but read as
 // "behind". Arrows never write depth, so they cannot z-fight the water or each other.
+//
+// Third-party code: the fragment shader's `sdTriangle` is adapted from Inigo Quilez, "Triangle - distance 2D"
+// (https://www.shadertoy.com/view/XsXSz4, https://iquilezles.org/articles/distfunctions2d/). Adapted for
+// sailing-school (renamed parameters, inlined). Also listed in THIRD_PARTY_NOTICES.md. Its licence:
+//
+//   The MIT License
+//   Copyright © 2014 Inigo Quilez
+//   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+//   documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+//   the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+//   to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above
+//   copyright notice and this permission notice shall be included in all copies or substantial portions of the
+//   Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+//   LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+//   SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+//   OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+//   DEALINGS IN THE SOFTWARE.
 import * as THREE from 'three';
 import { OVERLAY_COMMON, OVERLAY_OUTPUT, bindOverlayMesh, overlayUniforms, type OverlayContext } from './overlayMaterial';
 
@@ -47,7 +64,14 @@ void main() {
   vec4 vs = viewMatrix * vec4(aStart, 1.0);
   vec4 ve = viewMatrix * vec4(aEnd, 1.0);
   bool persp = projectionMatrix[2][3] == -1.0;
-  if (uVisible < 0.5 || aColor.a <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  // The arrow in view space (metres): a vector that is merely small fades out; only one that really points along
+  // the line of sight becomes the ⊙ / ⊗ symbol.
+  vec3 dv = ve.xyz - vs.xyz;
+  float worldLen = length(dv);
+  vec3 sight = persp ? normalize(0.5 * (vs.xyz + ve.xyz)) : vec3(0.0, 0.0, -1.0);
+  bool alongSight = worldLen > 0.05 && abs(dot(dv, sight)) > 0.95 * worldLen;
+  float present = smoothstep(0.015, 0.06, worldLen);
+  if (uVisible < 0.5 || aColor.a <= 0.0 || present <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   if (persp) {
     // Trim the part behind the near plane so the projection stays valid.
     float zc = -1.001 * projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
@@ -78,9 +102,9 @@ void main() {
   float along;
   float across;
   float z;
-  if (len < 0.4 * headLen) {
+  if (alongSight && len < 0.4 * headLen) {
     // Seen end-on: a circle with a dot (pointing at the viewer) or a cross (pointing away).
-    endOn = ne.z < ns.z ? 1.0 : -1.0;
+    endOn = dot(dv, sight) < 0.0 ? 1.0 : -1.0;
     float r = headHalf + glow + 2.0;
     vec2 q = vec2(corner.x * 2.0 - 1.0, corner.y) * r;
     p = 0.5 * (ss + se) + q;
@@ -100,7 +124,7 @@ void main() {
   vLen = len;
   vShape = vec4(shaftHalf, hl, hh, glow);
   vEndOn = endOn;
-  vColor = vec4(overlayColor(aColor.rgb), aColor.a * (uHiddenPass > 0.5 ? aHidden : 1.0));
+  vColor = vec4(overlayColor(aColor.rgb), aColor.a * present * (uHiddenPass > 0.5 ? aHidden : 1.0));
 }
 `;
 
@@ -113,7 +137,7 @@ varying vec4 vShape;
 varying vec4 vColor;
 varying float vEndOn;
 
-// Signed distance to a triangle, after Inigo Quilez (MIT). Adapted for sailing-school.
+// Signed distance to a triangle — adapted from Inigo Quilez (MIT, © 2014; see the file header).
 float sdTriangle(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
   vec2 e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
   vec2 v0 = p - p0, v1 = p - p1, v2 = p - p2;
@@ -193,6 +217,7 @@ export class ArrowBatch {
   private color!: THREE.InstancedBufferAttribute;
   private shape!: THREE.InstancedBufferAttribute;
   private hidden!: THREE.InstancedBufferAttribute;
+  private attrs: THREE.InstancedBufferAttribute[] = [];
   private capacity = 0;
   private count = 0;
 
@@ -229,11 +254,14 @@ export class ArrowBatch {
 
   end(): void {
     this.geometry.instanceCount = this.count;
-    for (const attr of [this.start, this.end_, this.color, this.shape, this.hidden]) {
+    for (let i = 0; i < this.attrs.length; i++) {
+      const attr = this.attrs[i]!;
       attr.clearUpdateRanges();
       attr.addUpdateRange(0, Math.max(1, this.count) * attr.itemSize);
       attr.needsUpdate = true;
     }
+    const ch = this.group.children;
+    for (let i = 0; i < ch.length; i++) ch[i]!.visible = this.count > 0;
   }
 
   dispose(): void {
@@ -242,6 +270,9 @@ export class ArrowBatch {
   }
 
   private allocate(capacity: number): void {
+    // Growing: free the old GL buffers and three's instance-count latch (`_maxInstanceCount`, set at the first draw),
+    // which would otherwise keep clamping draws to the old capacity.
+    if (this.capacity > 0) this.geometry.dispose();
     const grow = (old: THREE.InstancedBufferAttribute | undefined, size: number) => {
       const attr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * size), size);
       attr.setUsage(THREE.DynamicDrawUsage);
@@ -258,6 +289,7 @@ export class ArrowBatch {
     this.geometry.setAttribute('aColor', this.color);
     this.geometry.setAttribute('aShape', this.shape);
     this.geometry.setAttribute('aHidden', this.hidden);
+    this.attrs = [this.start, this.end_, this.color, this.shape, this.hidden];
     this.capacity = capacity;
   }
 }

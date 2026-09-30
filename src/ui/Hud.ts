@@ -118,6 +118,7 @@ export class Hud {
       setCamera: (c) => this.commands.setCamera(c),
       toggleOverlay: (k) => this.commands.toggleOverlay(k),
       togglePolar: () => this.togglePolar(),
+      setSliceHeight: (h) => this.app.setSliceHeight?.(h),
     });
     this.settings = new SettingsDialog(root, {
       setWind: (p) => this.setWind(p),

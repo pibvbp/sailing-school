@@ -5,7 +5,7 @@ import { airVelocityBody, awaAws } from '../../../sim/apparent';
 import { bodyToLocal } from '../../../shared/coords';
 import { BOAT } from '../../../shared/boatSpec';
 import { DEG, rotX } from '../../../shared/math';
-import { BoatFrame, TrueWindField, bearingToWorld, rigAir, windAtBodyPoint, pointWind, worldToBearing } from '../frames';
+import { BoatFrame, TrueWindField, bearingToWorld, boatVelocityWorld, rigAir, windAtBodyPoint, pointWind, worldToBearing } from '../frames';
 import { sail } from './helpers';
 
 describe('frames', () => {
@@ -22,12 +22,14 @@ describe('frames', () => {
     }
   });
 
-  it('the masthead wind triangle closes and its apparent wind matches the masthead instrument', () => {
+  it('the masthead triangle: true wind from the TWD, boat-motion wind opposite the boat’s velocity, apparent as the instrument', () => {
     const { snap } = sail(12, 45);
     const w = windAtBodyPoint(snap, BOAT.mast.x, 0, -BOAT.mast.topH, pointWind());
-    const sum = w.trueW.clone().add(w.boatW);
-    expect(sum.distanceTo(w.appW)).toBeLessThan(1e-12);
+    // True wind blows FROM the TWD: the air moves toward the opposite bearing.
+    expect(worldToBearing(-w.trueW.x, -w.trueW.z)).toBeCloseTo(snap.wind.twd, 6);
     expect(w.trueW.length()).toBeCloseTo(snap.wind.tws * 1.0027, 1); // log gradient at 10.2 m
+    // Steady sailing (no yaw or roll rate to speak of): the boat-motion wind is minus the velocity over the ground.
+    expect(w.boatW.clone().add(boatVelocityWorld(snap, new THREE.Vector3())).length()).toBeLessThan(0.05);
     // Horizontal apparent wind vs the rig-plane instrument: equal speed-ish, angle within the heel projection (~2°).
     const heading = snap.boat.heading;
     const fwd = bearingToWorld(heading, new THREE.Vector3());

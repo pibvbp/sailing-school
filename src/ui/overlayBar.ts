@@ -1,7 +1,7 @@
 // Bottom-right cluster (spec §3.2): camera buttons and overlay toggles (with their hotkeys), plus the
 // polar chart toggle. Reflects the App's overlay state, which lessons may change.
 import { CAMERA_KEYS, OVERLAY_KEYS, type CameraKey, type OverlayKey } from '../lessons/types';
-import { blurAfterMouse, h, icon, Segmented, setClass, type IconName } from './dom';
+import { blurAfterMouse, h, icon, Segmented, setClass, Slider, type IconName } from './dom';
 
 export const OVERLAY_META: Record<OverlayKey, { label: string; title: string; icon: IconName; key?: string }> = {
   windTriangle: { label: 'Wind', title: 'Wind triangle: true, boat-motion and apparent wind', icon: 'windTriangle' },
@@ -29,7 +29,12 @@ export interface OverlayBarHooks {
   setCamera(c: CameraKey): void;
   toggleOverlay(k: OverlayKey): void;
   togglePolar(): void;
+  /** Flow-slice height (m above the waterline). */
+  setSliceHeight?(h: number): void;
 }
+
+/** Default flow-slice height: mid-rig, where both sails are working. */
+export const SLICE_HEIGHT_DEFAULT = 4.5;
 
 export class OverlayBar {
   readonly el: HTMLElement;
@@ -38,6 +43,7 @@ export class OverlayBar {
   private readonly state = new Map<OverlayKey, boolean>();
   private readonly polarBtn: HTMLButtonElement;
   private polarOn = false;
+  private readonly sliceRow: HTMLElement;
 
   constructor(hooks: OverlayBarHooks) {
     this.cams = new Segmented('Camera', CAMERA_KEYS.map((c) => ({ value: c, ...CAMERA_META[c] })), hooks.setCamera, 'sx-cams');
@@ -62,9 +68,17 @@ export class OverlayBar {
     }, [icon('chart', 18), h('span', { class: 'sx-ovl-label', text: 'Polar' })]);
     blurAfterMouse(this.polarBtn);
     grid.append(this.polarBtn);
+    const slice = new Slider({
+      label: 'Slice height', min: 1, max: 9, step: 0.1, ends: ['boom', 'masthead'],
+      format: (v) => `${v.toFixed(1)} m`,
+      onInput: (v) => hooks.setSliceHeight?.(v),
+    });
+    slice.set(SLICE_HEIGHT_DEFAULT);
+    this.sliceRow = h('div', { class: 'sx-view-slice', attrs: { hidden: true } }, [slice.el]);
     this.el = h('div', { class: 'sx-view', attrs: { role: 'region', 'aria-label': 'View' } }, [
       h('div', 'sx-view-row', [h('span', { class: 'sx-view-k', text: 'Camera' }), this.cams.el]),
       grid,
+      this.sliceRow,
     ]);
   }
 
@@ -77,6 +91,7 @@ export class OverlayBar {
       const b = this.buttons.get(k)!;
       b.setAttribute('aria-pressed', String(on));
       setClass(b, 'is-on', on);
+      if (k === 'flowSlice') this.sliceRow.hidden = !on;
     }
     if (polarOpen !== this.polarOn) {
       this.polarOn = polarOpen;

@@ -36,6 +36,8 @@ export interface AppApi {
   startLesson(id: string): void;
   /** Replaces the course marks shown on the water (an empty list clears them). */
   setMarks(marks: readonly MarkSpec[]): void;
+  /** Height of the flow-slice overlay (m above the waterline). */
+  setSliceHeight?(h: number): void;
   controls: Controls;
 }
 

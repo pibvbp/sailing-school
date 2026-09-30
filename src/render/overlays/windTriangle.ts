@@ -64,8 +64,11 @@ export class WindTriangle {
     frame.point(DECK_POINT.x, DECK_POINT.y, DECK_POINT.z, this.anchor);
     this.triangle(this.wDeck, false);
     this.centroid.copy(this.p0).add(this.p1).add(this.anchor).multiplyScalar(1 / 3);
-    const twist = Math.abs(s.wind.awa) - Math.abs(s.wind.awaDeck);
-    l.deck.text('Apparent at deck', `${fmtKn(s.wind.awsDeck)} · ${fmtDeg(s.wind.awaDeck)} · twist ${Math.round(twist * 180 / Math.PI)}°`)
+    // Deck values and the twist come from the two drawn triangles themselves (the same points, the same moment), not
+    // from the sim's stern burgee, which differs from the bow while the boat turns.
+    const awaMast = this.awa(this.wMast, s), awaDeck = this.awa(this.wDeck, s);
+    const twist = Math.abs(awaMast) - Math.abs(awaDeck);
+    l.deck.text('Apparent at deck', `${fmtKn(this.wDeck.appW.length())} · ${fmtDeg(awaDeck)} · twist ${Math.round(twist * 180 / Math.PI)}°`)
       .tip(this.midpoint(this.p0, this.anchor), this.centroid, 6);
   }
 
@@ -83,6 +86,14 @@ export class WindTriangle {
     this.arrows.add(this.p0, this.p1, cTrue, side);
     this.arrows.add(this.p1, this.anchor, cBoat, side);
     this.arrows.add(this.p0, this.anchor, cApp, main);
+  }
+
+  /** Apparent wind angle (rad, + from starboard) of a drawn triangle, in the horizontal plane. */
+  private awa(w: ReturnType<typeof pointWind>, s: SimSnapshot): number {
+    const psi = s.boat.heading;
+    const ax = w.appW.x * Math.sin(psi) - w.appW.z * Math.cos(psi); // along the heading
+    const ay = w.appW.x * Math.cos(psi) + w.appW.z * Math.sin(psi); // to starboard
+    return Math.atan2(-ay, -ax);
   }
 
   private midpoint(a: THREE.Vector3, b: THREE.Vector3): THREE.Vector3 {

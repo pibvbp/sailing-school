@@ -122,8 +122,9 @@ export function boatVelocityWorld(s: SimSnapshot, out: THREE.Vector3): THREE.Vec
  * removing the boat's own puff influence, so gusts and lulls elsewhere are exactly where the ocean draws them.
  */
 export class TrueWindField {
-  private baseSpeed = 0;
-  private baseDir = 0;
+  /** Base (un-gusted) true wind at 10 m: speed (m/s) and direction FROM (rad). Read-only for callers. */
+  baseSpeed = 0;
+  baseDir = 0;
   private puffs: readonly Puff[] = [];
   private readonly tmp = { gain: 0, turn: 0 };
 
@@ -148,11 +149,6 @@ export class TrueWindField {
     out.e = -speed * Math.sin(dir);
     out.n = -speed * Math.cos(dir);
     return out;
-  }
-
-  /** Base (un-gusted) true wind at 10 m: speed (m/s) and direction FROM (rad). */
-  get base(): { speed: number; dir: number } {
-    return { speed: this.baseSpeed, dir: this.baseDir };
   }
 
   private influence(e: number, n: number, dir: number, out: { gain: number; turn: number }): void {

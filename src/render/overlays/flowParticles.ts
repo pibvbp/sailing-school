@@ -131,9 +131,10 @@ export class FlowParticles {
   private started = false;
   mode: 'rake' | 'volume' = 'rake';
 
-  constructor(ctx: OverlayContext, q: QualitySettings) {
+  /** `fields` lets a rebuilt particle system (quality change) keep the slices already solved. */
+  constructor(ctx: OverlayContext, q: QualitySettings, fields?: SliceField[]) {
     this.n = Math.max(300, Math.round(1800 * q.particleScale));
-    this.fields = PARTICLE_SLICE_HEIGHTS.map((h) => new SliceField(h));
+    this.fields = fields ?? PARTICLE_SLICE_HEIGHTS.map((h) => new SliceField(h));
     this.x = new Float32Array(this.n);
     this.y = new Float32Array(this.n);
     this.h = new Float32Array(this.n);
@@ -397,8 +398,8 @@ export class WindParticles {
   private spawn(i: number, anywhere: boolean, s: SimSnapshot): void {
     // Relative to the (moving) box the air enters through the edges facing the wind minus the boat's motion.
     boatVelocityWorld(s, this.boatV);
-    const b = this.field.base;
-    const we = -b.speed * Math.sin(b.dir) - this.boatV.x, wn = -b.speed * Math.cos(b.dir) + this.boatV.z;
+    const f = this.field;
+    const we = -f.baseSpeed * Math.sin(f.baseDir) - this.boatV.x, wn = -f.baseSpeed * Math.cos(f.baseDir) + this.boatV.z;
     let de: number, dn: number;
     const L = WIND_BOX * 0.98;
     if (anywhere) {

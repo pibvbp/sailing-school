@@ -1,7 +1,8 @@
 // Flow slice (spec §8 (c)): a translucent plane through the rig at a chosen height, like a textbook figure but live —
 // a pressure map (blue suction where the air speeds up, warm pressure where it slows; Cp = 1 − (V/V∞)²) with
-// isobars, streamlines whose dashes travel at the local air speed, the sail sections cut at that height, and a churning
-// texture where the flow has separated. Lives in the boat frame (it heels with the rig, perpendicular to the mast).
+// isobars, streamlines whose pulses travel at half the local air speed (so their spacing still shows the speed-up),
+// the sail sections cut at that height, and a churning texture where the flow has separated. Lives in the boat frame
+// (it heels with the rig, perpendicular to the mast).
 import * as THREE from 'three';
 import { CAMBER_PTS, FIELD_BOUNDS, SliceField, type FlowSample } from './flowField';
 import { guard, hit } from './flowParticles';
@@ -14,7 +15,7 @@ export const SLICE_MIN_H = 1.8;
 export const SLICE_MAX_H = 9.6;
 const LINE_SPACING = 0.5;
 const STREAM_MARGIN = 3.2;
-/** Streamlines: a faint continuous line with bright pulses travelling at the local air speed (coord = seconds). */
+/** Streamlines: a faint continuous line with bright pulses travelling at half the local air speed (coord = seconds). */
 const STREAM_STYLE = { width: 1.7, alpha: 0.95, dash: 0.5, duty: 0.3, dashSpeed: 0.5, dashFloor: 0.32 };
 /** RK2 step (m) — a little under half the grid spacing — and the longest streamline in steps. */
 const STEP = 0.15;
@@ -190,12 +191,15 @@ export class FlowSlice {
     this.height = Math.min(SLICE_MAX_H, Math.max(SLICE_MIN_H, h));
     this.field.h = this.height;
     for (const p of this.planes) p.position.y = this.height;
-    this.field.builtAt = -Infinity; // rebuild at the new height
+    // The owner (Overlays.setSliceHeight) queues a forced rebuild of the field at the new height.
   }
 
-  /** Per-frame: fade in, animate, pick up a rebuilt field. `toWorld` maps body points to world for the labels. */
-  update(dt: number, toWorld: (x: number, y: number, z: number, out: THREE.Vector3) => THREE.Vector3): void {
-    this.time += dt;
+  /**
+   * Per frame: fade in (real time `dt`), animate the churn and the streamline pulses (air time `flowDt`, frozen while
+   * paused), pick up a rebuilt field. `toWorld` maps body points to world for the labels.
+   */
+  update(dt: number, flowDt: number, toWorld: (x: number, y: number, z: number, out: THREE.Vector3) => THREE.Vector3): void {
+    this.time += flowDt;
     const u = this.material.uniforms;
     u['uTime']!.value = this.time;
     u['uAlpha']!.value = Math.min(1, (u['uAlpha']!.value as number) + dt * 3);

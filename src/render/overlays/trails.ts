@@ -1,6 +1,7 @@
 // Comet trails for flow particles. Every particle keeps its last K positions in a float texture used as a ring buffer
-// (one row per particle, one column per slot); the CPU writes only the newest point each frame and one instanced draw
-// turns each row into a tapering screen-space ribbon — curved streaks for the cost of a single texture upload.
+// (one row per slot, one column per particle): the CPU writes only the newest row each frame and uploads just that
+// row, and one instanced draw turns each column into a tapering screen-space ribbon. A per-particle history count
+// makes a respawned particle's older slots collapse onto its first point, so a respawn writes one texel, not K.
 // The oldest point slides toward the next one between pushes, so trails keep a steady length instead of sawtoothing.
 import * as THREE from 'three';
 import { OVERLAY_COMMON, OVERLAY_OUTPUT, bindOverlayMesh, overlayUniforms, type OverlayContext } from './overlayMaterial';
@@ -50,14 +51,16 @@ uniform float uOutline;
 attribute float aPoint;
 attribute float aSide;
 attribute float aAlpha;
+attribute float aHist;   // valid history points behind the head
 varying vec4 vColor;
 varying float vAcross;
 varying float vHalf;
 
 vec4 pt(int j) {
+  j = min(j, int(aHist + 0.5));   // older than the particle: its first recorded point
   int slot = uHead - j;
   if (slot < 0) slot += uSlots;
-  return texelFetch(uTrail, ivec2(slot, gl_InstanceID), 0);
+  return texelFetch(uTrail, ivec2(gl_InstanceID, slot), 0);
 }
 
 vec3 flowColor(float w) {
@@ -135,14 +138,19 @@ export class TrailRenderer {
   readonly group = new THREE.Group();
   readonly count: number;
   readonly slots: number;
-  /** Ring buffer: texel (slot, particle) = (x, y, z, value). */
+  /** Ring buffer: texel (particle, slot) = (x, y, z, value); row `slot` starts at 4·slot·count. */
   readonly data: Float32Array;
   /** Per-particle opacity. */
   readonly alpha: Float32Array;
+  /** Per-particle count of valid points behind the head (0 … slots − 1). */
+  readonly hist: Float32Array;
   head = 0;
   private readonly texture: THREE.DataTexture;
   private readonly geometry = new THREE.InstancedBufferGeometry();
   private readonly alphaAttr: THREE.InstancedBufferAttribute;
+  private readonly histAttr: THREE.InstancedBufferAttribute;
+  /** The whole texture must go up (first use); afterwards only the head row. */
+  private fullUpload = true;
   private readonly materials: THREE.ShaderMaterial[] = [];
   private readonly uniforms;
 
@@ -151,7 +159,8 @@ export class TrailRenderer {
     this.slots = Math.max(3, opts.slots);
     this.data = new Float32Array(this.count * this.slots * 4);
     this.alpha = new Float32Array(this.count);
-    this.texture = new THREE.DataTexture(this.data, this.slots, this.count, THREE.RGBAFormat, THREE.FloatType);
+    this.hist = new Float32Array(this.count);
+    this.texture = new THREE.DataTexture(this.data, this.count, this.slots, THREE.RGBAFormat, THREE.FloatType);
     this.texture.minFilter = this.texture.magFilter = THREE.NearestFilter;
     this.texture.generateMipmaps = false;
     this.texture.needsUpdate = true;
@@ -173,6 +182,9 @@ export class TrailRenderer {
     this.alphaAttr = new THREE.InstancedBufferAttribute(this.alpha, 1);
     this.alphaAttr.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aAlpha', this.alphaAttr);
+    this.histAttr = new THREE.InstancedBufferAttribute(this.hist, 1);
+    this.histAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('aHist', this.histAttr);
     this.geometry.instanceCount = this.count;
 
     const u = overlayUniforms();
@@ -220,16 +232,15 @@ export class TrailRenderer {
     });
   }
 
-  /** Put particle `i` at a point with no history (all slots). */
+  /** Put particle `i` at a point with no history. */
   reset(i: number, x: number, y: number, z: number, w: number): void {
-    const d = this.data;
-    let o = 4 * i * this.slots;
-    for (let k = 0; k < this.slots; k++, o += 4) { d[o] = x; d[o + 1] = y; d[o + 2] = z; d[o + 3] = w; }
+    this.set(i, x, y, z, w);
+    this.hist[i] = 0;
   }
 
   /** Move particle `i`'s newest point. */
   set(i: number, x: number, y: number, z: number, w: number): void {
-    const o = 4 * (i * this.slots + this.head);
+    const o = 4 * (this.head * this.count + i);
     const d = this.data;
     d[o] = x; d[o + 1] = y; d[o + 2] = z; d[o + 3] = w;
   }
@@ -238,19 +249,22 @@ export class TrailRenderer {
   push(): void {
     const prev = this.head;
     this.head = (this.head + 1) % this.slots;
-    const d = this.data;
-    const stride = 4 * this.slots;
-    for (let i = 0, a = 4 * prev, b = 4 * this.head; i < this.count; i++, a += stride, b += stride) {
-      d[b] = d[a]!; d[b + 1] = d[a + 1]!; d[b + 2] = d[a + 2]!; d[b + 3] = d[a + 3]!;
-    }
+    const row = 4 * this.count;
+    this.data.copyWithin(this.head * row, prev * row, prev * row + row);
+    const last = this.slots - 1;
+    for (let i = 0; i < this.count; i++) if (this.hist[i]! < last) this.hist[i] = this.hist[i]! + 1;
   }
 
-  /** Upload this frame's changes; `frac` = progress (0…1) toward the next push. */
+  /** Upload this frame's changes (the head row only); `frac` = progress (0…1) toward the next push. */
   commit(frac: number): void {
     this.uniforms.uHead.value = this.head;
     this.uniforms.uFrac.value = frac;
+    this.texture.clearUpdateRanges();
+    if (!this.fullUpload) this.texture.addUpdateRange(4 * this.head * this.count, 4 * this.count);
+    this.fullUpload = false;
     this.texture.needsUpdate = true;
     this.alphaAttr.needsUpdate = true;
+    this.histAttr.needsUpdate = true;
   }
 
   setVisible(on: boolean): void {

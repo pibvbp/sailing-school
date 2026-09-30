@@ -165,11 +165,12 @@ export class PointsOfSailWheel {
     this.windLabel = layer.create({ color: COLORS.trueWind, priority: 9, dx: 0, dy: -16 });
   }
 
-  update(s: SimSnapshot, boatWorld: THREE.Vector3): void {
+  update(dt: number, s: SimSnapshot, boatWorld: THREE.Vector3): void {
     const u = this.material.uniforms;
-    // Follow the true wind, lightly smoothed so gust-to-gust direction noise does not jitter the ring.
+    // Follow the true wind, smoothed (τ ≈ 0.2 s, frame-rate independent) so gust-to-gust noise does not jitter the ring.
     const twd = s.wind.twd;
-    this.twd = Number.isNaN(this.twd) ? twd : this.twd + Math.atan2(Math.sin(twd - this.twd), Math.cos(twd - this.twd)) * 0.08;
+    const k = 1 - Math.exp(-dt / 0.2);
+    this.twd = Number.isNaN(this.twd) ? twd : this.twd + Math.atan2(Math.sin(twd - this.twd), Math.cos(twd - this.twd)) * k;
     u['uTwd']!.value = this.twd;
     u['uHeading']!.value = s.boat.heading;
     this.mesh.position.set(boatWorld.x, 0.02, boatWorld.z);

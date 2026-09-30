@@ -178,6 +178,8 @@ export class SliceField {
   private bCount = 0;
   private readonly bU = { x: -1, y: 0 };
   private bSpeed = 1;
+  /** Yaw rate of the rebuild (the stream turns across the grid while the boat turns). */
+  private bR = 0;
   private bT = 0;
   /** Next band of rows to combine, or −1 when no rebuild is in progress. */
   private phase = -1;
@@ -200,6 +202,11 @@ export class SliceField {
     return this.phase >= 0;
   }
 
+  /** Step of the rebuild in progress (0 = first band of rows), or −1 when idle. */
+  get buildPhase(): number {
+    return this.phase;
+  }
+
   /**
    * Start a rebuild for this snapshot: cut the sails, solve the lattice and fill the induced-velocity grids. Unless
    * `force`d it is skipped (returns false) when the stream and every sail cut are unchanged within what the eye could
@@ -220,6 +227,7 @@ export class SliceField {
     this.bU.x = this.air.x;
     this.bU.y = this.air.y;
     this.bSpeed = Math.max(Math.hypot(this.air.x, this.air.y), 0.05);
+    this.bR = s.boat.yawRate;
     this.bT = s.t;
     this.remember();
     this.solveLattice();
@@ -229,9 +237,9 @@ export class SliceField {
     return true;
   }
 
-  /** Combine the next band of rows; returns true when the rebuilt field has been published. */
+  /** Combine the next band of rows; returns true when the rebuilt field has been published or nothing is pending. */
   work(): boolean {
-    if (this.phase < 0) return false;
+    if (this.phase < 0) return true;
     const j0 = this.phase * ROW_BAND;
     const j1 = Math.min(this.ny, j0 + ROW_BAND);
     this.combine(j0, j1);
@@ -415,9 +423,11 @@ export class SliceField {
           }
         }
         const keep = 1 - Math.min(deficit, 1.1);
+        // The free stream is taken at the mast (x = 1); a turning boat sees it rotate across the slice
+        // (air relative to a body point gains (r·y, −r·(x − 1)) from −ω × r). Advection only: colours stay stream-relative.
         const o = 4 * node;
-        data[o] = ax * keep;
-        data[o + 1] = ay * keep;
+        data[o] = ax * keep + this.bR * y;
+        data[o + 1] = ay * keep - this.bR * (x - 1);
         data[o + 2] = (Math.sqrt(cx * cx + cy * cy) / U) * Math.max(keep, 0);
         data[o + 3] = Math.min(turb, 1);
       }

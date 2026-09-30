@@ -129,6 +129,7 @@ void main() {
 
 const FLOATS = { position: 3, prev: 3, next: 3, side: 1, aColor: 4, aLine: 4, aAnim: 3 } as const;
 type AttrName = keyof typeof FLOATS;
+const ATTR_NAMES = Object.keys(FLOATS) as AttrName[];
 
 /** A set of polylines, rebuilt whenever its owner calls begin()/add()/end(). */
 export class LineBatch {
@@ -220,8 +221,8 @@ export class LineBatch {
   }
 
   end(): void {
-    for (const k of Object.keys(FLOATS) as AttrName[]) {
-      const attr = this.attrs[k];
+    for (let i = 0; i < ATTR_NAMES.length; i++) {
+      const attr = this.attrs[ATTR_NAMES[i]!];
       attr.clearUpdateRanges();
       attr.addUpdateRange(0, Math.max(1, this.points * 2) * attr.itemSize);
       attr.needsUpdate = true;
@@ -244,7 +245,9 @@ export class LineBatch {
 
   private allocate(points: number): void {
     const verts = points * 2;
-    for (const k of Object.keys(FLOATS) as AttrName[]) {
+    // Growing: free the replaced GL buffers (dispose also clears three's per-geometry draw state).
+    if (this.capacity > 0) this.geometry.dispose();
+    for (const k of ATTR_NAMES) {
       const size = FLOATS[k];
       const attr = new THREE.BufferAttribute(new Float32Array(verts * size), size);
       attr.setUsage(THREE.DynamicDrawUsage);

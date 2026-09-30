@@ -8,7 +8,9 @@ import { Overlays } from '../Overlays';
 import { FlowParticles } from '../flowParticles';
 import { CAMBER_PTS, newSliceElement, sailCutAt } from '../flowField';
 import { laylineBearings } from '../laylines';
-import { DISPLAY_CAP, agxForward, agxInverse } from '../overlayMaterial';
+import { DISPLAY_CAP, agxContrast, agxContrastInverse, agxForward, agxInverse, agxInverseLookup, agxInverseTable } from '../overlayMaterial';
+import { aeroSplit } from '../forces';
+import { SliceField } from '../flowField';
 import { COLORS, linearColor } from '../palette';
 import { SECTORS, pointOfSail } from '../wheel';
 import { bestMeanMs, sail } from './helpers';
@@ -65,6 +67,58 @@ describe('overlay colour output', () => {
         const arr = target.toArray(), got = out.toArray();
         expect(got.indexOf(Math.max(...got))).toBe(arr.indexOf(Math.max(...arr)));
       }
+    }
+  });
+});
+
+describe('overlay colour lookup table', () => {
+  it('the 256-entry table reproduces the inverse AgX contrast curve the shader used to bisect', () => {
+    const table = agxInverseTable();
+    let worst = 0;
+    for (let i = 0; i <= 2000; i++) {
+      const y = agxContrast(0) + ((agxContrast(1) - agxContrast(0)) * i) / 2000;
+      worst = Math.max(worst, Math.abs(agxInverseLookup(table, y) - agxContrastInverse(y)));
+    }
+    expect(worst).toBeLessThan(2e-3);
+  });
+});
+
+describe('aerodynamic force split', () => {
+  it('sails + induced drag + windage = the simulation’s aerodynamic force (drive and side force), on every point of sail', () => {
+    for (const [twa, spin] of [[40, false], [90, false], [150, true], [170, false]] as const) {
+      const { snap } = sail(14, twa, { spin, seconds: 30 });
+      const split = aeroSplit(snap, { windage: { x: 0, y: 0 }, induced: { x: 0, y: 0 }, sails: [] });
+      const c = Math.cos(snap.boat.heel);
+      let x = split.windage.x + split.induced.x, y = split.windage.y + split.induced.y;
+      for (const sailState of split.sails) { x += sailState.force.x; y += sailState.force.y * c; }
+      expect(x).toBeCloseTo(snap.forces.drive, 3);
+      expect(y).toBeCloseTo(snap.forces.sideForce, 3);
+      // The pieces are physical: windage drags downwind, the induced drag is not negligible upwind.
+      expect(Math.hypot(split.windage.x, split.windage.y)).toBeGreaterThan(5);
+      if (twa === 40) expect(Math.hypot(split.induced.x, split.induced.y)).toBeGreaterThan(40);
+    }
+  });
+});
+
+describe('degenerate snapshots', () => {
+  it('flat calm, dead stop, going astern and extreme heel: every overlay stays finite', () => {
+    const cases = [
+      sail(0.01, 45, { seconds: 2 }),
+      sail(12, 0, { seconds: 8, crew: false }), // in irons, drifting astern
+      sail(25, 90, { seconds: 15, crew: false, controls: { mainSheet: 1, jibSheet: 1, autoTrim: { main: false, jib: false, spinnaker: false } } }),
+    ];
+    for (const { sim } of cases) {
+      const scene = new THREE.Scene();
+      const boat = new THREE.Group();
+      const camera = new THREE.PerspectiveCamera(50, 1.6, 0.1, 5000);
+      const ov = new Overlays(scene, boat, tierSettings('low'));
+      for (const k of OVERLAY_KEYS) ov.set(k, true);
+      ov.setMarks([{ id: 'W', e: 0, n: 200, kind: 'windward' }]);
+      for (let i = 0; i < 90; i++) { sim.step(); sim.step(); ov.update(1 / 60, sim.snapshot(), camera); }
+      const priv = ov as unknown as { flow: { fields: SliceField[]; trails: { data: Float32Array } }; slice: { field: SliceField } };
+      for (const f of [...priv.flow.fields, priv.slice.field]) for (const v of f.data) expect(Number.isFinite(v)).toBe(true);
+      for (const v of priv.flow.trails.data) expect(Number.isFinite(v)).toBe(true);
+      ov.dispose();
     }
   });
 });

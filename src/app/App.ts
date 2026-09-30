@@ -280,6 +280,8 @@ export class App implements AppApi {
     this.ov.setMarks(marks);
   }
 
+  setSliceHeight(h: number): void { this.ov.setSliceHeight(h); }
+
   /** Lesson ids in catalogue order (used by the e2e smoke test). */
   lessonIds(): string[] { return Object.keys(this.runner.progress()); }
 
@@ -344,6 +346,7 @@ export class App implements AppApi {
     this.post.setQuality(q);
     this.lighting.setQuality(q);
     this.ocean.setQuality(q);
+    this.ov.setQuality(q);
     this.resize();
     this.hud.syncState({ qualityActual: this.qualityLock === 'auto' ? q.tier : null });
   }

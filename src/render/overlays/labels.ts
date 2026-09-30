@@ -29,7 +29,7 @@ const CSS = `
 .ssov-leaders{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .ssov-label{position:absolute;left:0;top:0;display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:11.5px;
   padding:2px 8px 2px 6px;border-radius:999px;background:rgba(7,18,33,.64);border:1px solid rgba(255,255,255,.12);
-  box-shadow:0 2px 10px rgba(0,8,20,.25);will-change:transform,opacity;transition:opacity .18s linear}
+  box-shadow:0 2px 10px rgba(0,8,20,.25);transition:opacity .18s linear}
 .ssov-label>i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--c);box-shadow:0 0 6px var(--c)}
 .ssov-label>b{font-weight:650;color:var(--c);letter-spacing:.01em}
 .ssov-label>span{font-variant-numeric:tabular-nums;color:#fff;opacity:.94;font-weight:600}
@@ -76,6 +76,8 @@ interface Entry {
   /** Screen direction tail → tip this frame. */
   tdx: number;
   tdy: number;
+  /** Leader line as last written. */
+  lx1: number; ly1: number; lx2: number; ly2: number;
 }
 
 export class Label {
@@ -201,7 +203,7 @@ export class LabelLayer {
     const e: Entry = {
       el, title, value, opts: full, anchor: new THREE.Vector3(), visible: false, titleText: '', valueText: '', color: full.color,
       sx: 0, sy: 0, w: 0, h: 0, x: 0, y: 0, shown: false, lastX: NaN, lastY: NaN, lastShown: false, line, dot, cls: '',
-      tail: new THREE.Vector3(), hasTail: false, gap: 10, tdx: 0, tdy: -1,
+      tail: new THREE.Vector3(), hasTail: false, gap: 10, tdx: 0, tdy: -1, lx1: NaN, ly1: NaN, lx2: NaN, ly2: NaN,
     };
     this.entries.push(e);
     return new Label(e);
@@ -220,8 +222,9 @@ export class LabelLayer {
 
   frame(camera: THREE.Camera): void {
     if (!this.root) return;
-    this.width = this.root.clientWidth || 1;
-    this.height = this.root.clientHeight || 1;
+    // The layer is `position: fixed; inset: 0`: the window size, without forcing a layout after this frame's writes.
+    this.width = innerWidth || 1;
+    this.height = innerHeight || 1;
     const persp = (camera as THREE.PerspectiveCamera).isPerspectiveCamera;
     const near = persp ? (camera as THREE.PerspectiveCamera).near : 0;
     if (this.hasFocus) {
@@ -332,15 +335,19 @@ export class LabelLayer {
       e.lastY = y;
     }
     if (e.line && e.dot) {
-      // Leader from the anchor to the nearest point of the label box.
+      // Leader from the anchor to the nearest point of the label box (rewritten only when it moved half a pixel).
       const cx = Math.min(Math.max(e.sx, e.x), e.x + e.w);
       const cy = Math.min(Math.max(e.sy, e.y), e.y + e.h);
-      e.line.setAttribute('x1', e.sx.toFixed(1));
-      e.line.setAttribute('y1', e.sy.toFixed(1));
-      e.line.setAttribute('x2', cx.toFixed(1));
-      e.line.setAttribute('y2', cy.toFixed(1));
-      e.dot.setAttribute('cx', e.sx.toFixed(1));
-      e.dot.setAttribute('cy', e.sy.toFixed(1));
+      const ax = Math.round(e.sx * 2) / 2, ay = Math.round(e.sy * 2) / 2, bx = Math.round(cx * 2) / 2, by = Math.round(cy * 2) / 2;
+      if (ax !== e.lx1 || ay !== e.ly1 || bx !== e.lx2 || by !== e.ly2) {
+        e.line.setAttribute('x1', String(ax));
+        e.line.setAttribute('y1', String(ay));
+        e.line.setAttribute('x2', String(bx));
+        e.line.setAttribute('y2', String(by));
+        e.dot.setAttribute('cx', String(ax));
+        e.dot.setAttribute('cy', String(ay));
+        e.lx1 = ax; e.ly1 = ay; e.lx2 = bx; e.ly2 = by;
+      }
     }
   }
 }

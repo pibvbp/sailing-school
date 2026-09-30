@@ -74,8 +74,48 @@ export function agxInverse(display: THREE.Vector3, exposure: number, out = new T
 }
 
 /**
+ * three.js layer the overlay meshes live on. `Overlays.update` enables it on the main camera only, so mirror and
+ * picture-in-picture cameras skip the overlay draws entirely (not just their fragments).
+ */
+export const OVERLAY_LAYER = 11;
+
+/** Size of the lookup table that replaces the per-fragment bisection of the inverse AgX contrast curve. */
+export const AGX_LUT_SIZE = 256;
+const AGX_LO = agxContrast(0);
+const AGX_HI = agxContrast(1);
+
+/** Table of `agxContrastInverse` over [agxContrast(0), agxContrast(1)], one value per texel centre. */
+export function agxInverseTable(): Float32Array {
+  const t = new Float32Array(AGX_LUT_SIZE);
+  for (let i = 0; i < AGX_LUT_SIZE; i++) t[i] = agxContrastInverse(AGX_LO + ((AGX_HI - AGX_LO) * i) / (AGX_LUT_SIZE - 1));
+  return t;
+}
+
+/** CPU twin of the shader lookup (linear filtering between texel centres), for tests. */
+export function agxInverseLookup(table: Float32Array, y: number): number {
+  const f = THREE.MathUtils.clamp((y - AGX_LO) / (AGX_HI - AGX_LO), 0, 1) * (AGX_LUT_SIZE - 1);
+  const i = Math.min(AGX_LUT_SIZE - 2, Math.floor(f));
+  return table[i]! + (table[i + 1]! - table[i]!) * (f - i);
+}
+
+let lutTexture: THREE.DataTexture | null = null;
+/** Shared half-float LUT texture (filterable on every WebGL2 device). */
+function agxLut(): THREE.DataTexture {
+  if (lutTexture) return lutTexture;
+  const table = agxInverseTable();
+  const half = new Uint16Array(AGX_LUT_SIZE);
+  for (let i = 0; i < AGX_LUT_SIZE; i++) half[i] = THREE.DataUtils.toHalfFloat(table[i]!);
+  lutTexture = new THREE.DataTexture(half, AGX_LUT_SIZE, 1, THREE.RedFormat, THREE.HalfFloatType);
+  lutTexture.minFilter = lutTexture.magFilter = THREE.LinearFilter;
+  lutTexture.wrapS = lutTexture.wrapT = THREE.ClampToEdgeWrapping;
+  lutTexture.generateMipmaps = false;
+  lutTexture.needsUpdate = true;
+  return lutTexture;
+}
+
+/**
  * GLSL shared by all overlay shaders: `overlayColor(displayLinear)` returns what to write so the final pixel shows
- * `displayLinear`; `overlayHidden()` tells the vertex shader to cull everything (wrong camera).
+ * `displayLinear`.
  */
 export const OVERLAY_COMMON = /* glsl */ `
 uniform float uOutMode;   // 0: display-referred target, 1: HDR buffer tone-mapped later by AgX
@@ -84,25 +124,18 @@ uniform float uVisible;   // 0 when this draw is for another camera (mirror, pic
 uniform vec2 uResolution; // viewport, physical px
 uniform float uPxScale;   // physical px per CSS px
 
-float agxContrast(float x) {
-  float x2 = x * x; float x4 = x2 * x2;
-  return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
-}
+uniform sampler2D uAgxInvLut;
+// Inverse of AgX's contrast curve, from a 256-entry table sampled between texel centres.
 float agxContrastInv(float y) {
-  float lo = 0.0; float hi = 1.0;
-  for (int i = 0; i < 16; i++) {
-    float mid = 0.5 * (lo + hi);
-    if (agxContrast(mid) < y) lo = mid; else hi = mid;
-  }
-  return 0.5 * (lo + hi);
+  float f = clamp((y - ${AGX_LO.toFixed(6)}) / ${(AGX_HI - AGX_LO).toFixed(6)}, 0.0, 1.0);
+  return texture(uAgxInvLut, vec2((f * ${(AGX_LUT_SIZE - 1).toFixed(1)} + 0.5) / ${AGX_LUT_SIZE.toFixed(1)}, 0.5)).r;
 }
 vec3 overlayColor(vec3 display) {
   vec3 c = clamp(display, 0.0, ${DISPLAY_CAP.toFixed(3)});
   if (uOutMode < 0.5) return c;
   c = ${glslMat3(SRGB_TO_2020)} * c;
   c = ${glslMat3(OUTSET_INV)} * pow(max(c, 1e-6), vec3(1.0 / 2.2));
-  const float lo = ${agxContrast(0).toFixed(6)}; const float hi = ${agxContrast(1).toFixed(6)};
-  c = vec3(agxContrastInv(clamp(c.r, lo, hi)), agxContrastInv(clamp(c.g, lo, hi)), agxContrastInv(clamp(c.b, lo, hi)));
+  c = vec3(agxContrastInv(c.r), agxContrastInv(c.g), agxContrastInv(c.b));
   c = exp2(c * ${(MAX_EV - MIN_EV).toFixed(6)} + (${MIN_EV.toFixed(6)}));
   c = ${glslMat3(REC2020_TO_SRGB)} * (${glslMat3(INSET_INV)} * c);
   return max(c, 0.0) / uExposure;
@@ -126,6 +159,7 @@ export type OverlayUniforms = {
   uVisible: THREE.IUniform<number>;
   uResolution: THREE.IUniform<THREE.Vector2>;
   uPxScale: THREE.IUniform<number>;
+  uAgxInvLut: THREE.IUniform<THREE.Texture>;
 };
 
 export function overlayUniforms(): OverlayUniforms {
@@ -135,10 +169,12 @@ export function overlayUniforms(): OverlayUniforms {
     uVisible: { value: 1 },
     uResolution: { value: new THREE.Vector2(1, 1) },
     uPxScale: { value: 1 },
+    uAgxInvLut: { value: agxLut() },
   };
 }
 
 const viewport = new THREE.Vector4();
+const cssSize = new THREE.Vector2();
 
 /** Update the shared uniforms right before a draw (called from `onBeforeRender`). */
 export function syncOverlayUniforms(u: OverlayUniforms, renderer: THREE.WebGLRenderer, camera: THREE.Camera, ctx: OverlayContext): void {
@@ -149,13 +185,15 @@ export function syncOverlayUniforms(u: OverlayUniforms, renderer: THREE.WebGLRen
   u.uExposure.value = Math.max(1e-4, renderer.toneMappingExposure);
   renderer.getCurrentViewport(viewport);
   u.uResolution.value.set(Math.max(1, viewport.z), Math.max(1, viewport.w));
-  const css = renderer.domElement.clientWidth || viewport.z / renderer.getPixelRatio();
-  u.uPxScale.value = viewport.z / Math.max(1, css);
+  // CSS size from the renderer (no DOM layout read mid-render); render targets scale with it.
+  renderer.getSize(cssSize);
+  u.uPxScale.value = viewport.z / Math.max(1, cssSize.x);
 }
 
 /** Attach the per-draw uniform sync to a mesh. */
 export function bindOverlayMesh(mesh: THREE.Object3D, u: OverlayUniforms, ctx: OverlayContext): void {
   mesh.onBeforeRender = (renderer, _scene, camera) => syncOverlayUniforms(u, renderer, camera, ctx);
+  mesh.layers.set(OVERLAY_LAYER);
   mesh.frustumCulled = false;
   mesh.castShadow = false;
   mesh.receiveShadow = false;

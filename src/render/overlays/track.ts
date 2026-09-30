@@ -52,7 +52,7 @@ export class TrackTrail {
     this.dirty = true;
   }
 
-  /** Rebuild the line when new points arrived; the live end always joins the boat. */
+  /** Rebuild the line when new points arrived (every 0.5 s; the newest point lags the boat by at most that, under the hull). */
   draw(lines: LineBatch, s: SimSnapshot): void {
     if (this.count < 1) { lines.begin(); lines.end(); return; }
     if (!this.dirty) return;

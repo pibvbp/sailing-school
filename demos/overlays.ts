@@ -185,8 +185,9 @@ kit.onFrame((dt) => {
   kit.controls.target.add(delta);
   prev.copy(now);
 
+  // Real frame time, as the App passes it; the overlays take the air's own clock from the snapshot's time.
   const t0 = performance.now();
-  overlays.update(step, snap, kit.camera);
+  overlays.update(Math.min(dt, 0.1), snap, kit.camera);
   cpu.push(performance.now() - t0);
   if (cpu.length > 300) cpu.shift();
   frames++;
