@@ -52,3 +52,67 @@ the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 ```
 
+
+## ABYSSAL — Token-Gremlin/natural-disasters (MIT)
+
+The FFT ocean in `src/render/env/ocean/` (cascades, spectrum and butterfly passes, projected grid,
+cascade sampling, foam accumulation, water shading, procedural foam/ripple textures, full-screen pass
+helper) is adapted from `src/ocean/OceanFFT.js`, `src/ocean/OceanMesh.js`, `src/ocean/OceanSampleGLSL.js`
+and `src/gfx/{FullScreenPass,NoiseGLSL,ShadingGLSL,ProceduralTextures}.js` of
+https://github.com/Token-Gremlin/natural-disasters.
+
+```
+MIT License
+
+Copyright (c) 2026 Davi (Token-Gremlin)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## wave-riders — developmentation/wave-riders (MIT)
+
+The ocean height sampler (`src/render/env/ocean/sampler.ts`, `shaders/probe.glsl.ts`: surface height
+grid rendered from the ocean shader, read back asynchronously, bilinear lookup, two-level grid) and the
+Kelvin wake ribbon (`src/render/env/ocean/wake.ts`, `shaders/wake.glsl.ts`) are adapted from
+`src/game/WaveField.js`, `src/game/Wake.js` and `src/ocean/OceanSampleGLSL.js` of
+https://github.com/developmentation/wave-riders (a fork of ABYSSAL).
+
+```
+MIT License
+
+Copyright (c) 2026 Davi (Token-Gremlin)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
