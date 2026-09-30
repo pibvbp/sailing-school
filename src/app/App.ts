@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { createRenderer, pixelRatioFor } from '../render/core/renderer';
 import { PostChain } from '../render/core/post';
 import { QualityGovernor } from '../render/core/quality';
+import { FrameTimer } from '../render/core/frameTimer';
 import type { QualitySettings, QualityTier } from '../render/core/types';
 import { SkySystem } from '../render/env/sky';
 import { Lighting } from '../render/env/lighting';
@@ -79,6 +80,8 @@ export class App implements AppApi {
   readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 40000);
   sim: Simulation;
   private readonly governor = new QualityGovernor('high');
+  /** Real frame cost (GPU timer query where available, else CPU busy time) for the governor's step-up. */
+  private readonly frameTimer: FrameTimer;
   private quality: QualitySettings;
   private qualityLock: QualityTier | 'auto' = 'auto';
   private readonly sky: SkySystem;
@@ -127,6 +130,7 @@ export class App implements AppApi {
     this.renderer = createRenderer(canvas);
     // The post chain renders several passes per frame; count the whole frame, not just the last pass.
     this.renderer.info.autoReset = false;
+    this.frameTimer = new FrameTimer(this.renderer);
     this.quality = this.governor.settings;
     this.renderer.setPixelRatio(pixelRatioFor(this.quality));
 
@@ -382,6 +386,7 @@ export class App implements AppApi {
   }
 
   private readonly frame = (now: number): void => {
+    this.frameTimer.begin();
     // The governor sees the raw frame time (it ignores hidden-tab gaps itself); the sim gets a clamped dt.
     const rawMs = Math.max(0, now - this.last);
     const dt = Math.min(0.1, rawMs / 1000);
@@ -447,8 +452,9 @@ export class App implements AppApi {
     this.runner.update(snap, dt * scale);
     this.post.render(dt);
     this.tcam.render(dt, this.hud.telltaleCamRect(), this.scene, this.jibTelltales, this.boatRoot, snap.wind.twa >= 0 ? 1 : -1, THREE.AgXToneMapping);
+    this.frameTimer.end();
 
-    if (this.governor.sample(rawMs, now)) this.applyQuality(this.governor.settings);
+    if (this.governor.sample(rawMs, now, this.frameTimer.cost)) this.applyQuality(this.governor.settings);
     this.frameMsAvg += (dt * 1000 - this.frameMsAvg) * 0.05;
     if (++this.frames === 5) window.__ready = true;
     if (this.frames % 30 === 0) {

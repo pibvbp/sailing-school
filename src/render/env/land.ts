@@ -137,9 +137,9 @@ function buildIsland(spec: IslandSpec): THREE.BufferGeometry {
   return geometry;
 }
 
-/** Painted building parts: flat vertex colour, no terrain mottling. */
+/** Painted building parts: flat vertex colour, no terrain mottling. Indexed, like the islands they merge with. */
 function colored(geometry: THREE.BufferGeometry, color: THREE.ColorRepresentation, position: THREE.Vector3): THREE.BufferGeometry {
-  const g = geometry.index ? geometry.toNonIndexed() : geometry;
+  const g = geometry;
   g.deleteAttribute('uv');
   g.translate(position.x, position.y, position.z);
   const c = new THREE.Color(color);
@@ -231,9 +231,12 @@ function createLandMaterial(): THREE.MeshStandardMaterial {
       .replace('#include <common>', `#include <common>\nvarying vec3 vLandWorld;\nvarying float vMottle;\nuniform float landHaze;\n${MOTTLE_GLSL}`)
       // Woods, scrub and bare patches differ 2–4× in albedo: mottle in stops, not percent.
       .replace('#include <color_fragment>', '#include <color_fragment>\n\tdiffuseColor.rgb *= exp2( 2.4 * vMottle * landMottle( vLandWorld.xz ) );')
-      .replace('#include <fog_fragment>', HAZE_GLSL);
+      // Haze on linear radiance, before tone mapping and output encoding (three's fog runs after them), so it
+      // is right both into the HDR buffer and in the direct-to-canvas fallback (review M-2); no fog on top.
+      .replace('#include <opaque_fragment>', `#include <opaque_fragment>\n${HAZE_GLSL}`)
+      .replace('#include <fog_fragment>', '');
   };
-  material.customProgramCacheKey = () => 'land-haze-5';
+  material.customProgramCacheKey = () => 'land-haze-6';
   return material;
 }
 
@@ -260,7 +263,8 @@ export class Land {
     const lighthouseSpec = ISLANDS[1]!;
     const top = highestPoint(islands[1]!);
     const lighthouse = buildLighthouse(top.setY(top.y - 0.5));
-    const geometry = mergeGeometries([...islands.map((g) => g.toNonIndexed()), lighthouse.geometry])!;
+    // Everything stays indexed: ≈ 33 k vertices instead of ≈ 190 k for the same 64 k triangles (review M-5).
+    const geometry = mergeGeometries([...islands, lighthouse.geometry])!;
     for (const g of islands) g.dispose();
     lighthouse.geometry.dispose();
     geometry.computeBoundingSphere();

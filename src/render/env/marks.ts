@@ -149,6 +149,8 @@ interface Mark {
   heave: number;
   tilt: THREE.Vector2;
   tiltRate: THREE.Vector2;
+  /** Not updated yet: its first update snaps it to the local wave slope. */
+  fresh: boolean;
 }
 
 export class Marks {
@@ -189,6 +191,7 @@ export class Marks {
       heave: 0,
       tilt: new THREE.Vector2(),
       tiltRate: new THREE.Vector2(),
+      fresh: true,
     });
   }
 
@@ -199,7 +202,10 @@ export class Marks {
     this.marks.delete(id);
   }
 
-  /** `t` = seconds (any monotonic clock); `heightAt(e, n)` = water surface height at a sim world point. */
+  /**
+   * `t` = seconds (sim time); `heightAt(e, n)` = water surface height at a sim world point. While `t` does not
+   * advance (paused, or reset backwards) the marks hold their rocking state instead of snapping to the slope.
+   */
   update(t: number, heightAt: (e: number, n: number) => number): void {
     const dt = Number.isNaN(this.lastT) ? 0 : THREE.MathUtils.clamp(t - this.lastT, 0, 0.1);
     this.lastT = t;
@@ -214,13 +220,15 @@ export class Marks {
       const targetRoll = Math.atan(slopeE);
       const targetPitch = Math.atan(slopeN);
       // Second-order follower: the buoy rocks and overshoots a little instead of snapping to the slope.
-      if (dt > 0) {
+      if (mark.fresh) {
+        mark.tilt.set(targetRoll, targetPitch);
+        mark.tiltRate.set(0, 0);
+        mark.fresh = false;
+      } else if (dt > 0) {
         mark.tiltRate.x += (omega * omega * (targetRoll - mark.tilt.x) - 2 * ROCK_DAMPING * omega * mark.tiltRate.x) * dt;
         mark.tiltRate.y += (omega * omega * (targetPitch - mark.tilt.y) - 2 * ROCK_DAMPING * omega * mark.tiltRate.y) * dt;
         mark.tilt.x += mark.tiltRate.x * dt;
         mark.tilt.y += mark.tiltRate.y * dt;
-      } else {
-        mark.tilt.set(targetRoll, targetPitch);
       }
       // A moored mark swings slowly on its anchor line.
       const yaw = mark.yaw + 0.35 * Math.sin(t * 0.05 + mark.swingPhase);

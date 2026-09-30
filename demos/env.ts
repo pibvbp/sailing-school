@@ -4,16 +4,20 @@
 // Query: ?hour=17 ?clouds=0.35 ?view=<compass deg the camera looks at> ?pitch=-1 ?height=2.6 ?fov=50
 //        ?tier=high ?tone=agx|aces ?wind=12 (kn) ?windFrom=200 (deg) ?drift=<s of cloud drift>
 //        ?probe=1 (grey/white/chrome test objects) ?probe=2 (deck + rig: shadows, whites) ?hud=0
-//        ?bench=1 (GPU cost of sky/scene/post) ?bench=post (post layouts)
+//        ?bench=1 (GPU cost of sky, scene, post, env bake) ?bench=post (post chain vs the old chain, real frames)
+//        ?bench=post-all (alternative layouts) ?bench=post-ablate (post chain minus one piece at a time)
 //        ?markView=<deg> (bearing the marks are laid out around) ?flash=1 (lighthouse lamp held on)
+//        ?nantest=1 (+Inf and NaN patches: the post chain must stay finite) ?auto=1 (governor drives the tier)
+//        ?ldr=1 (the post chain's direct-to-canvas fallback)
 //        tuning: ?turbidity= ?rayleigh= ?mie= ?mieg= ?sexp= ?ev=<exposure bias in stops> ?meter=0..1
 //                ?cscale= ?cedge= ?cdensity= ?ccoverage= ?celev= (clouds) ?wslope= ?wrough= ?wtile= (stand-in sea)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { BlendFunction, BloomEffect, EffectComposer, EffectPass, FXAAEffect, RenderPass, SMAAEffect, SMAAPreset, ToneMappingEffect, ToneMappingMode, VignetteEffect } from 'postprocessing';
 import { createRenderer } from '../src/render/core/renderer';
-import { PostChain, type ToneMapping } from '../src/render/core/post';
+import { createBloom, HdrFxaaEffect, HdrGuardEffect, PostChain, VibranceEffect, type ToneMapping } from '../src/render/core/post';
 import { QualityGovernor, tierSettings, type QualityTier } from '../src/render/core/quality';
+import { FrameTimer } from '../src/render/core/frameTimer';
 import { ATMOSPHERE, SkySystem } from '../src/render/env/sky';
 import { Lighting } from '../src/render/env/lighting';
 import { Land } from '../src/render/env/land';
@@ -65,7 +69,7 @@ sky.meteringWeight = metering;
 const lighting = new Lighting(scene, sky, quality);
 const land = new Land(scene, sky);
 const marks = new Marks(scene);
-const post = new PostChain(renderer, scene, camera, quality);
+const post = new PostChain(renderer, scene, camera, quality, { hdr: params.get('ldr') !== '1' });
 post.setToneMapping((params.get('tone') ?? 'agx') as ToneMapping);
 
 // --- camera: eye height above the water, looking along a compass bearing ------------------------------------
@@ -213,6 +217,40 @@ if (params.get('probe') === '2') {
   lighting.follow(rig);
 }
 
+// ?nantest=1: patches that write fp16-overflowing (+Inf once stored) and NaN values into the HDR buffer.
+// The post chain must show a white glowing patch and a small black patch, never spreading black blocks.
+if (params.get('nantest') === '1') {
+  const zero = { value: 0 };
+  const patch = (glsl: string, off: number) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.ShaderMaterial({ uniforms: { zero }, fragmentShader: `uniform float zero;\nvoid main() { ${glsl} }` }));
+    const b = viewBearing + THREE.MathUtils.degToRad(off);
+    m.position.set(Math.sin(b) * 12, 2.2, -Math.cos(b) * 12);
+    m.lookAt(camera.position);
+    scene.add(m);
+  };
+  // A highlight above the fp16 maximum (+Inf when stored on IEEE GPUs; Apple saturates to 65 504), and a
+  // NaN bit pattern (fast-math compilers fold 0/0 away; on Apple even this comes out as undefined values).
+  patch('gl_FragColor = vec4(vec3(1.0e6 + zero), 1.0);', -6);
+  patch('gl_FragColor = vec4(vec3(uintBitsToFloat(0x7fc00000u) + zero), 1.0);', 6);
+  // What do these shaders actually store in an fp16 target on this GPU? (raw half-float bits)
+  const probe = new THREE.WebGLRenderTarget(2, 1, { type: THREE.HalfFloatType });
+  const probeScene = new THREE.Scene();
+  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const half = (glsl: string, x: number) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 2), new THREE.ShaderMaterial({ uniforms: { zero }, fragmentShader: `uniform float zero;\nvoid main() { ${glsl} }` }));
+    m.position.set(x, 0, -0.5);
+    probeScene.add(m);
+  };
+  half('gl_FragColor = vec4(vec3(1.0e6 + zero), 1.0);', -0.5);
+  half('gl_FragColor = vec4(vec3(uintBitsToFloat(0x7fc00000u) + zero), 1.0);', 0.5);
+  renderer.setRenderTarget(probe);
+  renderer.render(probeScene, cam);
+  const bits = new Uint16Array(8);
+  renderer.readRenderTargetPixels(probe, 0, 0, 2, 1, bits);
+  renderer.setRenderTarget(null);
+  (window as unknown as { __nanbits: string[] }).__nanbits = Array.from(bits).map((b) => b.toString(16));
+}
+
 // --- GPU throughput benchmark: N renders, then a 1-pixel readback to wait for the GPU. (ANGLE/Metal timer
 // queries time whole command buffers, and gl.finish() does not block there.)
 const skyOnly = new THREE.Scene();
@@ -235,14 +273,41 @@ function syncGpu(toScreen: boolean): void {
   }
 }
 
-function timeGpu(runs: number, toScreen: boolean, fn: () => void): number {
+function timeGpu(runs: number, toScreen: boolean | THREE.WebGLRenderTarget, fn: () => void): number {
+  const sync = () => {
+    if (typeof toScreen === 'boolean') syncGpu(toScreen);
+    else renderer.readRenderTargetPixels(toScreen, 0, 0, 1, 1, toScreen.texture.type === THREE.HalfFloatType ? pixel16 : pixel8);
+  };
   fn();
-  syncGpu(toScreen);
+  sync();
   const t0 = performance.now();
   for (let i = 0; i < runs; i++) fn();
-  syncGpu(toScreen);
+  sync();
   return (performance.now() - t0) / runs;
 }
+
+/**
+ * Ends a benchmark "frame" the way a real one ends: the canvas pass is closed by a draw elsewhere, so its tile
+ * stores are paid. (Repeating a pass into the same target lets ANGLE/Metal merge the passes and skip them.)
+ */
+const tinyTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedByteType, depthBuffer: false });
+const tinyScene = new THREE.Scene();
+const tinyCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+{
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0x808080, depthTest: false }));
+  quad.frustumCulled = false;
+  tinyScene.add(quad);
+}
+const closeFrame = () => { renderer.setRenderTarget(tinyTarget); renderer.render(tinyScene, tinyCam); renderer.setRenderTarget(null); };
+const directFrame = () => {
+  const saved = renderer.toneMapping;
+  renderer.toneMapping = THREE.AgXToneMapping;
+  renderer.setRenderTarget(null);
+  renderer.clear();
+  renderer.render(scene, camera);
+  renderer.toneMapping = saved;
+  closeFrame();
+};
 
 /** Each figure is the best of several rounds: other GPU work on the machine only ever adds time. */
 function benchmark(dt: number): Record<string, number> {
@@ -259,48 +324,72 @@ function benchmark(dt: number): Record<string, number> {
   skyMesh.visible = false;
   const sceneWithoutSkyMs = best(5, 15, false, toProbe(scene));
   skyMesh.visible = true;
-  const frameWithPostMs = best(5, 15, true, () => { renderer.setRenderTarget(null); post.render(dt); });
+  const directFrameMs = best(5, 15, true, directFrame);
+  const frameWithPostMs = best(5, 15, true, () => { post.render(dt); closeFrame(); });
   const envBakeMs = best(5, 4, false, () => { sky.setTimeOfDay(sky.hours); sky.update(1, camera, windFrom, windSpeed); toProbe(skyOnly)(); }) - skyFullScreenMs;
   renderer.setRenderTarget(null);
-  return { skyFullScreenMs, skyInSceneMs: sceneMs - sceneWithoutSkyMs, sceneMs, postMs: frameWithPostMs - sceneMs, frameWithPostMs, envBakeMs };
+  return { skyFullScreenMs, skyInSceneMs: sceneMs - sceneWithoutSkyMs, sceneMs, directFrameMs, frameWithPostMs, postMs: frameWithPostMs - directFrameMs, envBakeMs };
 }
 
-/** ?bench=post: cost of alternative post-chain layouts, each as its own composer (scene render included). */
+/**
+ * ?bench=post: real-frame cost of post-chain layouts versus the same frame without post. Every case ends its
+ * frame the way a real frame does (the canvas pass is closed, so tile stores are paid), all cases are
+ * interleaved within each round, and each figure is the best round (outside GPU load only adds time).
+ */
 function benchmarkPostLayouts(): Record<string, number> {
-  const bloom = () => new BloomEffect({ blendFunction: BlendFunction.ADD, mipmapBlur: true, luminanceThreshold: 50, intensity: 0.4 });
+  const bloom7 = () => new BloomEffect({ blendFunction: BlendFunction.ADD, mipmapBlur: true, luminanceThreshold: 50, intensity: 0.4 });
+  const bloomLite = (levels = 5) => {
+    const b = new BloomEffect({ blendFunction: BlendFunction.ADD, mipmapBlur: true, luminanceThreshold: 50, intensity: 0.4, levels });
+    b.luminancePass.resolution.scale = 0.5;
+    const base = b.setSize.bind(b);
+    b.setSize = (w: number, h: number) => { base(w, h); b.mipmapBlurPass.setSize(Math.round(w / 2), Math.round(h / 2)); };
+    return b;
+  };
   const tone = () => new ToneMappingEffect({ mode: ToneMappingMode.AGX });
   const layouts: Record<string, () => EffectPass[]> = {
-    sceneOnly: () => [],
-    toneOnly: () => [new EffectPass(camera, tone())],
-    bloomTone: () => [new EffectPass(camera, bloom(), tone())],
-    bloomTone_smaaVignette: () => [new EffectPass(camera, bloom(), tone()), new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }), new VignetteEffect())],
-    bloomTone_smaaMediumVignette: () => [new EffectPass(camera, bloom(), tone()), new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.MEDIUM }), new VignetteEffect())],
-    bloomTone_fxaaVignette: () => [new EffectPass(camera, bloom(), tone()), new EffectPass(camera, new FXAAEffect(), new VignetteEffect())],
-    fusedSmaaBloomToneVignette: () => [new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }), bloom(), tone(), new VignetteEffect())],
-    msaa4_bloomToneVignette: () => [new EffectPass(camera, bloom(), tone(), new VignetteEffect())],
-    bloomHalfLumTone_smaaVignette: () => {
-      const b = bloom();
-      b.luminancePass.resolution.scale = 0.5;
-      return [new EffectPass(camera, b, tone()), new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }), new VignetteEffect())];
-    },
-    bloom5HalfLumTone_smaaVignette: () => {
-      const b = new BloomEffect({ blendFunction: BlendFunction.ADD, mipmapBlur: true, luminanceThreshold: 50, intensity: 0.4, levels: 5 });
-      b.luminancePass.resolution.scale = 0.5;
-      return [new EffectPass(camera, b, tone()), new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }), new VignetteEffect())];
-    },
+    before_bloom7_smaaHigh_2pass: () => [new EffectPass(camera, bloom7(), tone()), new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }), new VignetteEffect())],
   };
+  if (params.get('bench') === 'post-ablate') {
+    const vig = () => new VignetteEffect({ offset: 0.22, darkness: 0.42 });
+    Object.assign(layouts, {
+      P0_handFused_fxaa_bloomLite: () => [new EffectPass(camera, new FXAAEffect(), bloomLite(), tone(), vig())],
+      P1_production: () => { const p = new EffectPass(camera, new HdrFxaaEffect(), new HdrGuardEffect(), createBloom(), tone(), new VibranceEffect(0.25), vig()); p.dithering = true; return [p]; },
+      P2_plainFxaa: () => { const p = new EffectPass(camera, new FXAAEffect(), new HdrGuardEffect(), createBloom(), tone(), new VibranceEffect(0.25), vig()); p.dithering = true; return [p]; },
+      P3_noGuard: () => { const p = new EffectPass(camera, new HdrFxaaEffect(), createBloom(), tone(), new VibranceEffect(0.25), vig()); p.dithering = true; return [p]; },
+      P4_unpatchedBloom: () => { const p = new EffectPass(camera, new HdrFxaaEffect(), new HdrGuardEffect(), bloomLite(), tone(), new VibranceEffect(0.25), vig()); p.dithering = true; return [p]; },
+      P5_noVibrance: () => { const p = new EffectPass(camera, new HdrFxaaEffect(), new HdrGuardEffect(), createBloom(), tone(), vig()); p.dithering = true; return [p]; },
+      P6_noDither: () => [new EffectPass(camera, new HdrFxaaEffect(), new HdrGuardEffect(), createBloom(), tone(), new VibranceEffect(0.25), vig())],
+    });
+  }
+  if (params.get('bench') === 'post-all') {
+    Object.assign(layouts, {
+      tone_1pass: () => [new EffectPass(camera, tone())],
+      bloomLite_smaaHigh_2pass: () => [new EffectPass(camera, bloomLite(), tone()), new EffectPass(camera, new SMAAEffect({ preset: SMAAPreset.HIGH }), new VignetteEffect())],
+      fused_fxaa_bloomLite_1pass: () => [new EffectPass(camera, new FXAAEffect(), bloomLite(), tone(), new VignetteEffect())],
+      fused_noAA_bloomLite_1pass: () => [new EffectPass(camera, bloomLite(), tone(), new VignetteEffect())],
+    });
+  }
   const size = renderer.getSize(new THREE.Vector2());
-  const out: Record<string, number> = {};
+  const cases: Array<[string, () => void, () => void]> = [];
+  cases.push(['noPost_directToCanvas', directFrame, () => undefined]);
+  cases.push(['production_PostChain', () => { post.render(1 / 60); closeFrame(); }, () => undefined]);
   for (const [name, make] of Object.entries(layouts)) {
-    const composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, multisampling: name.startsWith('msaa4') ? 4 : 0 });
+    const composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType });
     composer.addPass(new RenderPass(scene, camera));
     for (const pass of make()) composer.addPass(pass);
     composer.setSize(size.x, size.y, false);
-    let min = Infinity;
-    for (let r = 0; r < 5; r++) min = Math.min(min, timeGpu(12, true, () => composer.render(1 / 60)));
-    out[name] = min;
-    composer.dispose();
+    composer.render(1 / 60);
+    cases.push([name, () => { composer.render(1 / 60); closeFrame(); }, () => composer.dispose()]);
   }
+  const out: Record<string, number> = {};
+  for (const [name] of cases) out[name] = Infinity;
+  for (let r = 0; r < 9; r++) {
+    for (const [name, run] of cases) out[name] = Math.min(out[name]!, timeGpu(8, true, run));
+  }
+  for (const [, , dispose] of cases) dispose();
+  const base = out['noPost_directToCanvas']!;
+  for (const [name] of cases) if (name !== 'noPost_directToCanvas') out[`${name}__post`] = out[name]! - base;
+  out['pixels'] = renderer.getDrawingBufferSize(new THREE.Vector2()).toArray().reduce((a, b) => a * b, 1);
   return out;
 }
 
@@ -324,14 +413,19 @@ if (drift > 0) sky.update(drift, camera, windFrom, windSpeed);
 const readout = document.getElementById('readout')!;
 const showHud = params.get('hud') !== '0';
 const governor = new QualityGovernor(tier);
+const frameTimer = new FrameTimer(renderer);
+const autoQuality = params.get('auto') === '1';
+const tierLog: string[] = [];
 const cpu = { skyMs: 0, lightMs: 0, marksMs: 0 };
 let frames = 0;
 let last = performance.now();
 let avgFrame = 16.7;
 
 renderer.setAnimationLoop((now) => {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  const rawMs = Math.max(0, now - last);
+  const dt = Math.min(0.1, rawMs / 1000);
   last = now;
+  frameTimer.begin();
   const t = now / 1000;
   controls.update();
 
@@ -348,12 +442,19 @@ renderer.setAnimationLoop((now) => {
   ripples.offset.set(t * 0.004 * Math.sin(windFrom + Math.PI), t * 0.004 * Math.cos(windFrom + Math.PI));
   if (exposureBias !== 1) renderer.toneMappingExposure = sky.exposure * exposureBias;
 
-  if (benchMode && frames === 40) bench = params.get('bench') === 'post' ? benchmarkPostLayouts() : benchmark(dt);
+  if (benchMode && frames === 40) bench = params.get('bench')!.startsWith('post') ? benchmarkPostLayouts() : benchmark(dt);
   renderer.info.reset();
   post.render(dt);
+  frameTimer.end();
 
   avgFrame = avgFrame * 0.95 + dt * 1000 * 0.05;
-  governor.sample(dt * 1000, now);
+  if (governor.sample(rawMs, now, frameTimer.cost)) {
+    tierLog.push(`${(now / 1000).toFixed(1)}s→${governor.settings.tier}`);
+    if (autoQuality) {
+      post.setQuality(governor.settings);
+      lighting.setQuality(governor.settings);
+    }
+  }
   frames++;
   if (frames % 30 === 0) {
     const info = renderer.info.render;
@@ -362,6 +463,8 @@ renderer.setAnimationLoop((now) => {
       hour: sky.hours, exposure: sky.exposure, incidentExposure: sky.incidentExposure, sunIntensity: sky.sunIntensity, sunColor: sky.sunColor.toArray(),
       fogColor: sky.fogColor.toArray(), horizonColor: sky.horizonColor.toArray(), skyIlluminance: sky.skyIlluminance,
       bench, cpuMs: { ...cpu }, tier: governor.settings.tier,
+      frameCost: { ms: frameTimer.cost.ms, gpu: frameTimer.cost.gpu, cpuMs: frameTimer.cpuMs, gpuMs: frameTimer.gpuMs },
+      tierLog: [...tierLog],
       postHdr: post.hdr, calls: info.calls, triangles: info.triangles,
     };
     if (showHud) {

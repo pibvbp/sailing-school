@@ -66,6 +66,15 @@ export class Lighting {
     this.sun.shadow.map = null;
   }
 
+  /** Remove the light from the scene and free its shadow map. */
+  dispose(): void {
+    this.sun.shadow.map?.dispose();
+    this.sun.shadow.map = null;
+    this.sun.removeFromParent();
+    this.sun.target.removeFromParent();
+    this.sun.dispose();
+  }
+
   /** Call once per frame after the target moved and the sky updated. */
   update(): void {
     const sky = this.sky;

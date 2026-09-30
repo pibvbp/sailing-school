@@ -70,6 +70,8 @@ export class PreethamModel {
   private g = 0.8;
   private exponent = 1.5;
   private readonly fex = [0, 0, 0];
+  /** Scratch for `radiance()`: it runs 16× per frame for exposure metering (no per-call garbage). */
+  private readonly rgb = [0, 0, 0];
 
   set(params: AtmosphereParams, sunDirection: THREE.Vector3): this {
     this.sun.copy(sunDirection).normalize();
@@ -107,7 +109,7 @@ export class PreethamModel {
     const g2 = this.g * this.g;
     const mPhase = (1 / (4 * Math.PI)) * ((1 - g2) / Math.pow(1 - 2 * this.g * cosTheta + g2, 1.5));
     const blend = THREE.MathUtils.clamp(Math.pow(1 - this.sun.y, 5), 0, 1);
-    const rgb = [0, 0, 0];
+    const rgb = this.rgb;
     for (let i = 0; i < 3; i++) {
       const bR = this.betaR[i]!;
       const bM = this.betaM[i]!;
@@ -187,6 +189,9 @@ function createSkyMaterial(): THREE.ShaderMaterial {
  * ratio that puts shadows about three stops below sunlit faces.
  */
 const SUN_ILLUMINANCE_SCALE = 0.1;
+// fp16 headroom: with the sun at 23 (17:00) to 49 (noon), a glint from a surface with GGX α ≲ 0.01 can exceed
+// the HDR buffer's 65 504; the post chain clamps it back to a finite white (see render/core/post.ts).
+
 /** Remote-sensing reflectance of open coastal water (sr⁻¹) and its hue: the light the sea sends back up. */
 const WATER_REFLECTANCE = 0.0055;
 const WATER_TINT = new THREE.Color().setRGB(0.18, 0.55, 0.62, THREE.LinearSRGBColorSpace);

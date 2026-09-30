@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GOVERNOR, QualityGovernor, TIER_ORDER, tierSettings, type QualityTier } from '../quality';
+import { GOVERNOR, QualityGovernor, TIER_ORDER, tierSettings, type FrameCost, type QualityTier } from '../quality';
 
 /** Feeds frames of a constant duration; returns every tier change with its timestamp. */
 function run(gov: QualityGovernor, frameMs: number, durationMs: number, startMs: number) {
@@ -12,6 +12,33 @@ function run(gov: QualityGovernor, frameMs: number, durationMs: number, startMs:
   }
   return { changes, now };
 }
+
+type Work = Record<QualityTier, { cpu: number; gpu: number }>;
+
+/**
+ * A machine with known per-tier work on a display of `hz`: rAF intervals are vsync-quantised (CPU and GPU
+ * pipelined, so a frame takes max(cpu, gpu)), and the cost is what a FrameTimer would report: GPU-inclusive
+ * with a working timer query, CPU busy time without one, nothing at all for the legacy call.
+ */
+function simulate(gov: QualityGovernor, o: { hz: number; work: Work; timer: 'gpu' | 'cpu' | 'none'; durationMs: number; startMs: number }) {
+  const period = 1000 / o.hz;
+  const changes: Array<{ at: number; tier: QualityTier }> = [];
+  const timeIn: Record<QualityTier, number> = { low: 0, medium: 0, high: 0, ultra: 0 };
+  let now = o.startMs;
+  const end = o.startMs + o.durationMs;
+  while (now < end) {
+    const w = o.work[gov.settings.tier];
+    const busy = Math.max(w.cpu, w.gpu);
+    const interval = period * Math.max(1, Math.ceil(busy / period - 1e-9));
+    now += interval;
+    timeIn[gov.settings.tier] += interval;
+    const cost: FrameCost | undefined = o.timer === 'gpu' ? { ms: busy, gpu: true } : o.timer === 'cpu' ? { ms: w.cpu, gpu: false } : undefined;
+    if (gov.sample(interval, now, cost)) changes.push({ at: now, tier: gov.settings.tier });
+  }
+  return { changes, now, timeIn };
+}
+
+const uniform = (cpu: number, gpu: number): Work => ({ low: { cpu, gpu }, medium: { cpu, gpu }, high: { cpu, gpu }, ultra: { cpu, gpu } });
 
 /** A governor that is past its start-up warm-up, sitting at `tier` with 16.7 ms frames. */
 function warmed(tier: QualityTier) {
@@ -97,16 +124,17 @@ describe('QualityGovernor', () => {
     expect(changes.map((c) => c.tier)).toEqual(['high']);
   });
 
-  it('backs off (doubles the wait) when a step-up has to be undone soon after', () => {
+  it('after a failed step-up (interval rule) it retries only once the higher tier is predicted to fit', () => {
     const { gov, now } = warmed('medium');
     let t = run(gov, 10, 12_000, now).now;     // → high
     expect(gov.settings.tier).toBe('high');
-    t = run(gov, 25, 4000, t).now;             // too heavy → back to medium quickly
+    t = run(gov, 25, 4000, t).now;             // too heavy: 2.5× the cost it was chosen at → back to medium
     expect(gov.settings.tier).toBe('medium');
-    const first = run(gov, 10, GOVERNOR.stepUpAfterMs * 2 - 1500, t);
-    expect(first.changes).toEqual([]);         // the normal 10 s is no longer enough
-    const second = run(gov, 10, 4000, first.now);
-    expect(second.changes.map((c) => c.tier)).toEqual(['high']);
+    const same = run(gov, 10, 60_000, t);      // unchanged scene: 10 ms × 2.5 = 25 ms would not fit
+    expect(same.changes).toEqual([]);
+    const lighter = run(gov, 5, GOVERNOR.stepUpAfterMs * 2 + 4000, same.now); // 5 × 2.5 = 12.5 ms fits
+    expect(lighter.changes.map((c) => c.tier)).toEqual(['high']);
+    expect(lighter.changes[0]!.at - same.now).toBeGreaterThanOrEqual(GOVERNOR.stepUpAfterMs * 2); // doubled wait
   });
 
   it('a hidden-tab gap neither changes the tier nor counts toward a step-up', () => {
@@ -136,6 +164,76 @@ describe('QualityGovernor', () => {
     const { gov, now } = warmed('ultra');
     const { changes } = run(gov, 6, 40_000, now);
     expect(changes).toEqual([]);
+  });
+
+  describe('with a measured frame cost (FrameTimer)', () => {
+    it('60 Hz: steps up on the measured cost, not on the vsync interval', () => {
+      const { gov, now } = warmed('medium');
+      const { changes } = simulate(gov, { hz: 60, work: uniform(2, 6), timer: 'gpu', durationMs: 26_000, startMs: now });
+      expect(changes.map((c) => c.tier)).toEqual(['high', 'ultra']);
+      expect(changes[0]!.at - now).toBeGreaterThanOrEqual(GOVERNOR.stepUpAfterMs);
+    });
+
+    it('60 Hz without a cost: the interval never shows headroom, so the tier holds (legacy rule)', () => {
+      const { gov, now } = warmed('medium');
+      const { changes } = simulate(gov, { hz: 60, work: uniform(2, 6), timer: 'none', durationMs: 60_000, startMs: now });
+      expect(changes).toEqual([]);
+    });
+
+    it('60 Hz: holds while the measured cost sits in the 12–20 ms band', () => {
+      const { gov, now } = warmed('high');
+      const { changes } = simulate(gov, { hz: 60, work: uniform(3, 14), timer: 'gpu', durationMs: 60_000, startMs: now });
+      expect(changes).toEqual([]);
+    });
+
+    it('60 Hz, GPU timer: one failed probe of a too-heavy tier, then no oscillation', () => {
+      const work: Work = { low: { cpu: 2, gpu: 5 }, medium: { cpu: 2, gpu: 8 }, high: { cpu: 3, gpu: 11 }, ultra: { cpu: 3, gpu: 19 } };
+      const { gov, now } = warmed('high');
+      const { changes, timeIn } = simulate(gov, { hz: 60, work, timer: 'gpu', durationMs: 20 * 60_000, startMs: now });
+      expect(changes.map((c) => c.tier)).toEqual(['ultra', 'high']); // probed once, never again
+      expect(timeIn.high / (20 * 60_000)).toBeGreaterThan(0.95);
+    });
+
+    it('60 Hz, GPU timer: retries the failed tier once the scene gets light enough for it', () => {
+      const heavy: Work = { low: { cpu: 2, gpu: 5 }, medium: { cpu: 2, gpu: 8 }, high: { cpu: 3, gpu: 11 }, ultra: { cpu: 3, gpu: 19 } };
+      const light: Work = { ...heavy, high: { cpu: 3, gpu: 6 }, ultra: { cpu: 3, gpu: 10.5 } };
+      const { gov, now } = warmed('high');
+      const first = simulate(gov, { hz: 60, work: heavy, timer: 'gpu', durationMs: 60_000, startMs: now });
+      expect(first.changes.map((c) => c.tier)).toEqual(['ultra', 'high']);
+      const later = simulate(gov, { hz: 60, work: light, timer: 'gpu', durationMs: 5 * 60_000, startMs: first.now });
+      expect(later.changes.map((c) => c.tier)).toEqual(['ultra']); // 6 ms × 19/11 ≈ 10.4 ms predicted: fits, and stays
+    });
+
+    it('CPU-only timing: a failed step-up bars that tier for the session; lock(null) lifts it', () => {
+      const work: Work = { low: { cpu: 2, gpu: 5 }, medium: { cpu: 3, gpu: 9 }, high: { cpu: 4, gpu: 14 }, ultra: { cpu: 4.5, gpu: 22 } };
+      const { gov, now } = warmed('high');
+      const run1 = simulate(gov, { hz: 60, work, timer: 'cpu', durationMs: 30 * 60_000, startMs: now });
+      expect(run1.changes.map((c) => c.tier)).toEqual(['ultra', 'high']); // CPU time cannot see the GPU cost: one probe
+      gov.lock(null);
+      const run2 = simulate(gov, { hz: 60, work, timer: 'cpu', durationMs: 20_000, startMs: run1.now });
+      expect(run2.changes.map((c) => c.tier)).toEqual(['ultra', 'high']);
+    });
+
+    it('120 Hz: the interval alone shows headroom; it settles on the highest tier that keeps 60 fps', () => {
+      const work: Work = { low: { cpu: 2, gpu: 4 }, medium: { cpu: 2, gpu: 7 }, high: { cpu: 3, gpu: 9.5 }, ultra: { cpu: 3, gpu: 14 } };
+      const legacy = warmed('medium');
+      const a = simulate(legacy.gov, { hz: 120, work, timer: 'none', durationMs: 60_000, startMs: legacy.now });
+      expect(a.changes.map((c) => c.tier)).toEqual(['high']); // at high the interval is 16.7 ms: holds
+      const timed = warmed('medium');
+      const b = simulate(timed.gov, { hz: 120, work, timer: 'gpu', durationMs: 60_000, startMs: timed.now });
+      expect(b.changes.map((c) => c.tier)).toEqual(['high', 'ultra']); // 9.5 ms measured → ultra, which holds 60 fps
+    });
+
+    it('a doubled step-up wait decays back after five stable minutes', () => {
+      const heavy: Work = { low: { cpu: 2, gpu: 5 }, medium: { cpu: 2, gpu: 8 }, high: { cpu: 3, gpu: 11 }, ultra: { cpu: 3, gpu: 19 } };
+      const light: Work = { ...heavy, high: { cpu: 3, gpu: 6 }, ultra: { cpu: 3, gpu: 10.5 } };
+      const { gov, now } = warmed('high');
+      const fail = simulate(gov, { hz: 60, work: heavy, timer: 'gpu', durationMs: 7 * 60_000, startMs: now });
+      expect(fail.changes.map((c) => c.tier)).toEqual(['ultra', 'high']);
+      const back = simulate(gov, { hz: 60, work: light, timer: 'gpu', durationMs: 60_000, startMs: fail.now });
+      expect(back.changes.map((c) => c.tier)).toEqual(['ultra']);
+      expect(back.changes[0]!.at - fail.now).toBeLessThan(GOVERNOR.stepUpAfterMs * 2); // back to the base wait
+    });
   });
 
   it('ignores invalid input', () => {
