@@ -89,7 +89,8 @@ export class JibModel {
 
   evaluate(c: Controls, gamma: number, furl: number, air: AirContext, alphaShift: number, blanket = 1): JibEvaluation {
     const geom = this.geometry(c, gamma, furl);
-    const sections = geom.map((g) => evaluateSection(g, JIB_AERO, air, { alphaShift, blanket }));
+    const q = furl > 0.97 ? 0 : blanket; // a furled jib is a tight roll on the forestay
+    const sections = geom.map((g) => evaluateSection(g, JIB_AERO, air, { alphaShift, blanket: q }));
     let luffMoment = 0;
     for (const r of sections) luffMoment += (r.point.x - r.luff.x) * r.force.y - (r.point.y - r.luff.y) * r.force.x;
     return { sections, sum: sumSections(sections, { x: 0, y: 0, z: -BOAT.mass.cgH }), luffMoment, clew: this.clewPoint(gamma, furl) };

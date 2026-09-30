@@ -164,7 +164,7 @@ UI writes only to `Controls`. Lessons read snapshots and may call the app's scen
 | Jib (≈105 %) | tack (3.88, h 1.05), head (1.23, h 9.70) on the forestay, luff 9.05, LP 3.05, foot 3.33, clew h 1.45, ≈13.8 m²; leads x +0.2…−0.4, y ±0.75 |
 | Spinnaker | SL 9.2, foot 5.2, half-width 3.9 → ≈32 m²; halyard at masthead |
 | Spinnaker pole | 2.90 m, mast end h 1.90, tip h 1.6…3.4 |
-| Keel (NACA 0012 fin) | root chord 1.00 @ h −0.36, tip 0.65 @ h −1.45, LE sweep 12°, root LE x +0.60; area ≈ 0.90 m²; CP ≈ (0.28, h −0.83) |
+| Keel (NACA 0012 fin) | root chord 1.00 @ h −0.36, tip 0.65 @ h −1.45, LE sweep 12°, root LE x +0.87; area ≈ 0.90 m²; CP ≈ (0.55, h −0.87) |
 | Rudder (spade, NACA 0012) | stock x −2.85, root 0.40 @ h −0.15, tip 0.28 @ h −1.15; ≈0.34 m²; CP ≈ (−2.85, h −0.62) |
 | Tiller | 1.05 m, varnished wood with extension |
 | Righting | GZ(φ) table: 0→0, 10°→0.163, 20°→0.310, 30°→0.425, 40°→0.505, 50°→0.550, 60°→0.560, 70°→0.535, 80°→0.475, 90°→0.390, 110°→0.180, 130°→−0.05 m (GM ≈ 0.95) |
