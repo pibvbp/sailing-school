@@ -4,8 +4,9 @@
 // luff–groove–stall meter and the telltales). `TouchDeck` is the phone version: tiller and sheet sliders.
 // Everything writes only to `app.controls` (read fresh on every access).
 import type { SimSnapshot, Telltale, SailState } from '../sim/types';
-import { DEG, clamp, wrapPi } from '../shared/math';
+import { DEG, clamp } from '../shared/math';
 import type { AppApi, ControlKey } from '../lessons/types';
+import { nudgeHelmTarget, SAIL_NAME, takeManualControl, type SailKey } from './input';
 import {
   button, fmtAngle, fmtHeading, fmtSheetAngle, fmtSided, h, icon, pct, s, Segmented, setClass, setDisabled, sideLetter, Slider, TextSlot, Toggle,
 } from './dom';
@@ -17,23 +18,17 @@ export interface TrimHooks {
   isLive(k: ControlKey): boolean;
 }
 
-type Sail = 'main' | 'jib' | 'spinnaker';
+type Sail = SailKey;
 type NumKey = 'mainSheet' | 'traveler' | 'vang' | 'outhaul' | 'cunningham' | 'backstay' | 'jibSheet' | 'jibLead' | 'jibFurl'
   | 'spinPole' | 'spinPoleHeight' | 'spinSheet';
 
-const SAIL_NAME: Record<Sail, string> = { main: 'Mainsail', jib: 'Jib', spinnaker: 'Spinnaker' };
 const AUTOPILOT_STEP = 1 * DEG;
 
 interface Bound { key: NumKey; slider: Slider; sail: Sail | null }
 
-/** Shared plumbing: take a sail off auto-trim when the learner grabs one of its controls. */
+/** The learner grabbed one of a sail's controls: same rule as the keyboard (see takeManualControl). */
 function takeManual(app: AppApi, hooks: TrimHooks, sail: Sail | null): void {
-  if (!sail) return;
-  const at = app.controls.autoTrim;
-  if (at[sail] && hooks.isLive(`autoTrim.${sail}`)) {
-    at[sail] = false;
-    hooks.notify(`${SAIL_NAME[sail]}: you're trimming — crew auto-trim off`);
-  }
+  if (sail) takeManualControl(app.controls, sail, hooks.notify);
 }
 
 function tillerText(v: number): string {
@@ -219,7 +214,7 @@ export class TrimPanel {
   private readonly mainGroove = new GrooveMeter();
   private readonly jibGroove = new GrooveMeter();
   private readonly spinGroove = new GrooveMeter();
-  private readonly ro: Record<'boom' | 'twist' | 'mainAoa' | 'clew' | 'jibAoa' | 'spinHoist' | 'curl' | 'collapse', TextSlot>;
+  private readonly ro: Record<'boom' | 'twist' | 'mainAoa' | 'clew' | 'jibAoa' | 'spinHoist' | 'curl' | 'collapse' | 'rudder' | 'leeway' | 'heel', TextSlot>;
   private readonly spinSection: Section;
   private spinWasUp = false;
   private snap: SimSnapshot | null = null;
@@ -254,10 +249,12 @@ export class TrimPanel {
     ]);
     this.tackBtn = button('Tack', { class: 'sx-btn--action', title: 'Tack: turn the bow through the wind (T)', onClick: () => { if (this.hooks.isLive('tack')) c().command = 'tack'; } });
     this.gybeBtn = button('Gybe', { class: 'sx-btn--action', title: 'Gybe: turn the stern through the wind (G)', onClick: () => { if (this.hooks.isLive('gybe')) c().command = 'gybe'; } });
+    const rudderRo = readout('Rudder'); const leewayRo = readout('Leeway'); const heelRo = readout('Heel');
     const helm = new Section('Helm', null, [
       this.helmMode.el,
       this.manualBox,
       this.pilotBox,
+      h('div', 'sx-ro-row', [rudderRo.el, leewayRo.el, heelRo.el]),
       h('div', 'sx-row sx-row--2', [this.tackBtn, this.gybeBtn]),
     ]);
 
@@ -271,7 +268,10 @@ export class TrimPanel {
     const boom = readout('Boom'); const twist = readout('Twist'); const mainAoa = readout('AoA');
     const clew = readout('Clew'); const jibAoa = readout('AoA');
     const spinHoist = readout('Hoist'); const curl = readout('Curl'); const collapse = readout('Shape');
-    this.ro = { boom: boom.slot, twist: twist.slot, mainAoa: mainAoa.slot, clew: clew.slot, jibAoa: jibAoa.slot, spinHoist: spinHoist.slot, curl: curl.slot, collapse: collapse.slot };
+    this.ro = {
+      boom: boom.slot, twist: twist.slot, mainAoa: mainAoa.slot, clew: clew.slot, jibAoa: jibAoa.slot, spinHoist: spinHoist.slot,
+      curl: curl.slot, collapse: collapse.slot, rudder: rudderRo.slot, leeway: leewayRo.slot, heel: heelRo.slot,
+    };
 
     const main = new Section('Mainsail', this.auto.main.el, [
       this.bind('mainSheet', 'main', { label: 'Sheet', term: 'sheet', min: 0, max: 1, ends: ['eased', 'trimmed'], format: pct }),
@@ -383,6 +383,10 @@ export class TrimPanel {
     this.hikeSlider.setAuto(hikeAuto);
     setClass(this.tackBtn, 'is-busy', snap.maneuver === 'tack');
     setClass(this.gybeBtn, 'is-busy', snap.maneuver === 'gybe');
+    // P/S as in the instrument strip: rudder + turns to starboard, leeway + slides to starboard, heel + starboard down.
+    this.ro.rudder.set(fmtSided(snap.boat.rudder));
+    this.ro.leeway.set(fmtSided(snap.boat.leeway, 1));
+    this.ro.heel.set(fmtSided(snap.boat.heel));
 
     const { main, jib, spinnaker } = snap.sails;
     this.ro.boom.set(fmtSheetAngle(main.boomAngle));
@@ -434,15 +438,7 @@ export class TrimPanel {
   }
 
   private nudge(dir: -1 | 1): void {
-    if (!this.hooks.isLive('helmTarget')) return;
-    const c = this.app.controls;
-    const d = dir * AUTOPILOT_STEP;
-    if (c.helmMode === 'heading') {
-      const x = (c.helmTarget + d) % (2 * Math.PI);
-      c.helmTarget = x < 0 ? x + 2 * Math.PI : x;
-    } else {
-      c.helmTarget = wrapPi(c.helmTarget - d);
-    }
+    if (this.hooks.isLive('helmTarget')) nudgeHelmTarget(this.app.controls, dir, AUTOPILOT_STEP);
   }
 }
 

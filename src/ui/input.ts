@@ -91,8 +91,11 @@ export interface KeyLike {
   preventDefault(): void;
 }
 
-/** 'text' = the learner is typing; 'slider' = a focused range/slider owns the arrow keys; 'widget' = owns Space/Enter. */
-export function focusKind(target: EventTarget | null | undefined): 'text' | 'slider' | 'widget' | null {
+/**
+ * 'text' = the learner is typing; 'slider' = a focused range/slider owns the arrow keys; 'widget' = owns Space/Enter;
+ * 'group' = a radio in a radio group owns both (arrows move between the options).
+ */
+export function focusKind(target: EventTarget | null | undefined): 'text' | 'slider' | 'widget' | 'group' | null {
   const el = target as { tagName?: unknown; type?: unknown; isContentEditable?: unknown; getAttribute?: (n: string) => string | null } | null;
   if (!el || typeof el.tagName !== 'string') return null;
   if (el.isContentEditable === true) return 'text';
@@ -106,7 +109,8 @@ export function focusKind(target: EventTarget | null | undefined): 'text' | 'sli
     return 'text';
   }
   if (role === 'slider') return 'slider';
-  if (tag === 'BUTTON' || tag === 'SUMMARY' || tag === 'A' || role === 'button' || role === 'radio' || role === 'switch') return 'widget';
+  if (role === 'radio') return 'group';
+  if (tag === 'BUTTON' || tag === 'SUMMARY' || tag === 'A' || role === 'button' || role === 'switch') return 'widget';
   return null;
 }
 
@@ -133,7 +137,31 @@ function approach(x: number, target: number, step: number): number {
   return x < target ? x + step : x - step;
 }
 
-const SAIL_LABEL = { main: 'Mainsail', jib: 'Jib', spinnaker: 'Spinnaker' } as const;
+export const SAIL_NAME = { main: 'Mainsail', jib: 'Jib', spinnaker: 'Spinnaker' } as const;
+export type SailKey = keyof typeof SAIL_NAME;
+
+/**
+ * The learner grabbed one of a sail's controls (key, slider or touch): the crew lets go of that sail.
+ * Shared by the keyboard, the trim panel and the touch deck so all three behave the same way.
+ */
+export function takeManualControl(c: AppApi['controls'], sail: SailKey, notify: (msg: string) => void): void {
+  if (!c.autoTrim[sail]) return;
+  c.autoTrim[sail] = false;
+  notify(`${SAIL_NAME[sail]}: you're trimming — crew auto-trim off`);
+}
+
+/**
+ * Autopilot target nudge. `bowDir` +1 turns the bow to starboard: the heading rises and the signed TWA/AWA falls.
+ */
+export function nudgeHelmTarget(c: AppApi['controls'], bowDir: number, step: number): void {
+  const d = bowDir * step;
+  if (c.helmMode === 'heading') {
+    const x = (c.helmTarget + d) % (2 * Math.PI);
+    c.helmTarget = x < 0 ? x + 2 * Math.PI : x;
+  } else {
+    c.helmTarget = wrapPi(c.helmTarget - d);
+  }
+}
 
 export class InputController {
   /** 'spring': the tiller returns to centre when released (default); 'sticky': it stays where it is. */
@@ -144,6 +172,7 @@ export class InputController {
   private furlTarget: number | null = null;
   private live: ((k: ControlKey) => boolean) | null = null;
   private commands: UiCommands;
+  private suspended = false;
   private readonly onKeyDown = (e: Event) => this.keyDown(e as unknown as KeyLike);
   private readonly onKeyUp = (e: Event) => this.keyUp(e as unknown as KeyLike);
   private readonly onBlur = () => this.releaseAll();
@@ -153,7 +182,24 @@ export class InputController {
     target.addEventListener('keydown', this.onKeyDown);
     target.addEventListener('keyup', this.onKeyUp);
     target.addEventListener('blur', this.onBlur);
+    // A hidden tab never receives the keyups of keys held when it was hidden.
+    target.addEventListener('visibilitychange', this.onBlur);
   }
+
+  /**
+   * While a dialog is open the keys belong to it: held keys are released, sailing keys are ignored (and not
+   * default-prevented, so the dialog can scroll), and only `?` / Esc still reach the HUD.
+   */
+  setSuspended(on: boolean): void {
+    if (on === this.suspended) return;
+    this.suspended = on;
+    if (on) {
+      this.releaseAll();
+      this.touchTiller = null;
+    }
+  }
+
+  get isSuspended(): boolean { return this.suspended; }
 
   /** Route UI-level commands (pause, cameras, overlays, help, menu) through the HUD. */
   setCommands(c: UiCommands | null): void {
@@ -170,17 +216,13 @@ export class InputController {
    * Grabbing the tiller while an autopilot steers takes the helm back, as on a real boat.
    */
   holdTiller(v: number | null): void {
+    if (this.suspended && v !== null) return;
     this.touchTiller = v === null ? null : clamp(v, -1, 1);
     const c = this.app.controls;
     if (v !== null && c.helmMode !== 'manual' && this.allowed('helmMode') && this.allowed('tiller')) {
       c.helmMode = 'manual';
       this.commands.notify('Autopilot off — you have the helm');
     }
-  }
-
-  /** Whether any steering input is active (keys or on-screen tiller). */
-  get steering(): boolean {
-    return this.touchTiller !== null || this.isHeld('port') || this.isHeld('stbd');
   }
 
   update(dt: number): void {
@@ -191,20 +233,13 @@ export class InputController {
     // Helm.
     const steer = (this.isHeld('stbd') ? 1 : 0) - (this.isHeld('port') ? 1 : 0);
     if (c.helmMode === 'manual') {
-      if (this.allowed('tiller')) {
-        if (this.touchTiller !== null) c.tiller = this.touchTiller;
-        else if (steer !== 0) c.tiller = approach(c.tiller, steer, INPUT_RATES.tillerSlew * fine * h);
-        else if (this.tillerMode === 'spring') c.tiller = approach(c.tiller, 0, INPUT_RATES.tillerCentre * h);
-      }
+      const live = this.allowed('tiller');
+      if (live && this.touchTiller !== null) c.tiller = this.touchTiller;
+      else if (live && steer !== 0) c.tiller = approach(c.tiller, steer, INPUT_RATES.tillerSlew * fine * h);
+      // Released (or locked by the lesson): the rudder self-centres rather than freezing where it was.
+      else if (this.tillerMode === 'spring' || !live) c.tiller = approach(c.tiller, 0, INPUT_RATES.tillerCentre * h);
     } else if (steer !== 0 && this.allowed('helmTarget')) {
-      // Autopilot: ←/→ nudge the target. Bow to starboard raises the heading and lowers the signed TWA/AWA.
-      const d = steer * INPUT_RATES.autopilot * fine * h;
-      if (c.helmMode === 'heading') {
-        const x = (c.helmTarget + d) % (2 * Math.PI);
-        c.helmTarget = x < 0 ? x + 2 * Math.PI : x;
-      } else {
-        c.helmTarget = wrapPi(c.helmTarget - d);
-      }
+      nudgeHelmTarget(c, steer, INPUT_RATES.autopilot * fine * h);
     }
 
     // Sheets, traveler, pole.
@@ -225,6 +260,7 @@ export class InputController {
     this.target.removeEventListener('keydown', this.onKeyDown);
     this.target.removeEventListener('keyup', this.onKeyUp);
     this.target.removeEventListener('blur', this.onBlur);
+    this.target.removeEventListener('visibilitychange', this.onBlur);
     this.releaseAll();
   }
 
@@ -250,11 +286,7 @@ export class InputController {
   ): void {
     if (dir === 0 || !this.allowed(key)) return;
     const c = this.app.controls;
-    if (c.autoTrim[sail]) {
-      // Grabbing a sheet means the learner is trimming: the crew lets go of that sail.
-      c.autoTrim[sail] = false;
-      this.commands.notify(`${SAIL_LABEL[sail]}: you're trimming — crew auto-trim off`);
-    }
+    takeManualControl(c, sail, (m) => this.commands.notify(m));
     c[key] = clamp(c[key] + dir * step, lo, hi);
   }
 
@@ -264,13 +296,20 @@ export class InputController {
   }
 
   private keyDown(e: KeyLike): void {
+    // macOS swallows the keyups of keys held while ⌘ is down: drop everything rather than risk a stuck key.
+    if (e.metaKey) this.releaseAll();
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const kind = focusKind(e.target);
     const id = keyId(e);
     this.shift = e.shiftKey;
     if (kind === 'text') return;
-    if (kind === 'widget' && (id === ' ' || id === 'enter')) return;
-    if (kind === 'slider' && NAV_KEYS.has(id)) return;
+    if (this.suspended) {
+      if (id === '?') this.commands.toggleHelp();
+      else if (id === 'escape') this.commands.escape();
+      return;
+    }
+    if ((kind === 'widget' || kind === 'group') && (id === ' ' || id === 'enter')) return;
+    if ((kind === 'slider' || kind === 'group') && NAV_KEYS.has(id)) return;
 
     const held = HELD_KEYS[id];
     if (held) {
@@ -313,6 +352,10 @@ export class InputController {
   }
 
   private keyUp(e: KeyLike): void {
+    if (e.metaKey) {
+      this.releaseAll();
+      return;
+    }
     this.shift = e.shiftKey;
     this.held.delete(e.code || keyId(e));
   }

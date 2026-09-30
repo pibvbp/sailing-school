@@ -24,7 +24,11 @@ export class LessonPanel implements LessonView {
   private readonly peekTitle: TextSlot;
   private readonly peekMeta: TextSlot;
   private readonly peekFill: HTMLElement;
-  private task: { box: HTMLElement; fill: HTMLElement; meta: TextSlot; next: HTMLButtonElement; hold: number; nextLabel: TextSlot } | null = null;
+  private task: {
+    box: HTMLElement; fill: HTMLElement; meta: TextSlot; next: HTMLButtonElement; hold: number; nextLabel: TextSlot;
+    /** Polite live region: announces completion once (the ticking hold timer would be too chatty). */
+    announce: HTMLElement; label: string;
+  } | null = null;
   private hintBox: HTMLElement | null = null;
   private lastTask = { progress: -1, held: -1, done: false };
 
@@ -58,16 +62,15 @@ export class LessonPanel implements LessonView {
     return this.model?.catalog.find((c) => c.id === id)?.title ?? null;
   }
 
-  get activeKind(): LessonViewModel['kind'] | null {
-    return this.model?.kind ?? null;
-  }
-
   /** Settings → "Reset lesson progress". */
   requestReset(): void {
     this.actions?.resetProgress();
   }
 
   render(m: LessonViewModel): void {
+    // Re-rendering replaces the buttons: if the learner was using the panel from the keyboard, keep focus in it.
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const hadFocus = active !== null && active !== document.body && this.el.contains(active);
     this.model = m;
     this.task = null;
     this.hintBox = null;
@@ -81,6 +84,16 @@ export class LessonPanel implements LessonView {
     this.content.scrollTop = 0;
     this.renderPeek(m);
     this.onRender?.(m);
+    if (hadFocus) {
+      // In priority order: an unanswered quiz option, the primary action, Next/Skip, else the lesson title.
+      const target = ['.sx-quiz-opt:not(:disabled)', '.sx-btn--primary:not(:disabled)', '.sx-btn--next:not(:disabled)', '.sx-lp-title']
+        .map((sel) => this.content.querySelector<HTMLElement>(sel))
+        .find((el) => el !== null);
+      if (target) {
+        if (!target.matches('button')) target.tabIndex = -1; // headings are focusable by script only
+        target.focus({ preventScroll: true });
+      }
+    }
   }
 
   setTask(st: TaskStatus): void {
@@ -102,6 +115,7 @@ export class LessonPanel implements LessonView {
       setClass(this.peek, 'is-done', st.done);
       setClass(t.next, 'sx-btn--primary', st.done);
       if (st.done) t.nextLabel.set(this.nextLabel(false));
+      t.announce.textContent = st.done ? `Task complete: ${t.label}` : '';
     }
   }
 
@@ -146,12 +160,14 @@ export class LessonPanel implements LessonView {
     if (st.taskLabel !== null) {
       const fill = h('span', 'sx-task-fill');
       const meta = h('span', 'sx-task-meta');
+      const announce = h('span', { class: 'sx-sr', attrs: { role: 'status', 'aria-live': 'polite' } });
       const box = h('div', { class: `sx-task${st.completed ? ' was-done' : ''}`, attrs: { role: 'group', 'aria-label': 'Task' } }, [
+        announce,
         h('div', 'sx-task-row', [h('span', 'sx-task-check', [icon('check', 14)]), h('span', { class: 'sx-task-label', html: textHtml(st.taskLabel) })]),
         h('div', 'sx-task-bar', [fill]),
         h('div', 'sx-task-foot', [h('span', { class: 'sx-task-kicker', text: st.holdSeconds > 0 ? `Hold for ${st.holdSeconds} s` : 'Task' }), meta]),
       ]);
-      this.task = { box, fill, meta: new TextSlot(meta), next, hold: st.holdSeconds, nextLabel: nextSlot };
+      this.task = { box, fill, meta: new TextSlot(meta), next, hold: st.holdSeconds, nextLabel: nextSlot, announce, label: st.taskLabel };
       this.task.meta.set(st.holdSeconds > 0 ? `0.0 / ${st.holdSeconds} s` : '0%');
       parts.push(box);
     }
@@ -260,7 +276,8 @@ export class LessonPanel implements LessonView {
       this.catalogList(catalog),
     ]);
     d.open = open || this.catalogOpen;
-    d.addEventListener('toggle', () => { this.catalogOpen = d.open; });
+    // A catalogue opened by the completion card must not stay open for the next lesson's steps.
+    d.addEventListener('toggle', () => { if (!open) this.catalogOpen = d.open; });
     return d;
   }
 

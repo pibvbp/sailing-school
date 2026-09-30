@@ -440,6 +440,48 @@ describe('LessonRunner: navigation, skipping, quiz', () => {
     expect(runner.activeLessonId).toBe('b');
   });
 
+  it('starting another lesson mid-lesson exits the current step exactly once and resets per-lesson state', () => {
+    const log: string[] = [];
+    const mk = (id: string): Lesson => ({
+      id, module: 'M', title: id, summary: '',
+      setup: (c) => { log.push(`setup:${id}:${JSON.stringify(c.data)}`); c.data['x'] = id; },
+      steps: [
+        { title: 's0', body: '', onEnter: () => log.push(`enter:${id}:0`), onExit: () => log.push(`exit:${id}:0`) },
+        { title: 's1', body: '', onEnter: () => log.push(`enter:${id}:1`), onExit: () => log.push(`exit:${id}:1`) },
+      ],
+    });
+    const { runner, h } = setup([mk('A'), mk('B')]);
+    h.frame();
+    runner.start('A');
+    runner.next();
+    runner.start('B');
+    expect(log).toEqual(['setup:A:{}', 'enter:A:0', 'exit:A:0', 'enter:A:1', 'exit:A:1', 'setup:B:{}', 'enter:B:0']);
+    expect(runner.activeStepIndex).toBe(0);
+  });
+
+  it('back from the first quiz question returns to the last step and restarts the quiz', () => {
+    const lesson: Lesson = { id: 'q', module: 'M', title: 'Q', summary: '', setup: () => {}, steps: [{ title: 'a', body: '' }, { title: 'b', body: '' }], quiz: QUIZ };
+    const { panel, runner, h } = setup([lesson]);
+    h.frame();
+    runner.start('q');
+    runner.next();
+    runner.next();
+    panel.actions.answer(0);
+    expect(panel.last.kind).toBe('quiz');
+    runner.back();
+    expect(panel.last.kind === 'step' && panel.last.index).toBe(1);
+    runner.next();
+    expect(panel.last).toMatchObject({ kind: 'quiz', index: 0, score: 0, answered: null });
+  });
+
+  it('exit before the first snapshot cancels a deferred start', () => {
+    const { runner, h } = setup([speedLesson()]);
+    runner.start('speed');
+    runner.exit();
+    h.frame(3);
+    expect(runner.activeLessonId).toBeNull();
+  });
+
   it('exit returns to the catalogue and offers to resume the unfinished lesson', () => {
     const { panel, runner, h } = setup([speedLesson()]);
     h.frame();

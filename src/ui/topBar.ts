@@ -41,6 +41,11 @@ export class TopBar {
   private readonly qualitySeg: Segmented<QualityTier | 'auto'>;
   private state: HudState | null = null;
   private paused: boolean | null = null;
+  private readonly onFullscreen = () => {
+    const on = document.fullscreenElement !== null;
+    this.fsBtn.replaceChildren(icon(on ? 'exitFullscreen' : 'fullscreen'));
+    this.fsBtn.setAttribute('aria-label', on ? 'Exit fullscreen' : 'Fullscreen');
+  };
 
   constructor(host: HTMLElement, private readonly hooks: TopBarHooks) {
     this.mode = new Segmented<AppMode>('Mode', [
@@ -81,13 +86,9 @@ export class TopBar {
     qualityBtn.addEventListener('click', () => this.qualityPop.toggle());
     this.fsBtn = button('Fullscreen', { icon: 'fullscreen', iconOnly: true, class: 'sx-btn--icon', title: 'Fullscreen', onClick: hooks.toggleFullscreen });
     if (typeof document !== 'undefined' && !document.fullscreenEnabled) this.fsBtn.hidden = true;
-    document.addEventListener('fullscreenchange', () => {
-      const on = document.fullscreenElement !== null;
-      this.fsBtn.replaceChildren(icon(on ? 'exitFullscreen' : 'fullscreen'));
-      this.fsBtn.setAttribute('aria-label', on ? 'Exit fullscreen' : 'Fullscreen');
-    });
+    document.addEventListener('fullscreenchange', this.onFullscreen);
 
-    this.el = h('header', { class: 'sx-top', attrs: { role: 'toolbar', 'aria-label': 'Sailing School' } }, [
+    this.el = h('header', { class: 'sx-top', attrs: { 'aria-label': 'Sailing School' } }, [
       h('div', 'sx-top-group is-brand sx-glass', [
         h('span', 'sx-logo', [icon('logo', 22)]),
         h('span', { class: 'sx-brand', text: 'Sailing School' }),
@@ -125,6 +126,12 @@ export class TopBar {
     this.timeCtl.sync(st.hour);
     this.windCtl.sync(st.wind);
     if (st.wind) this.setWindChip(st.wind.tws, st.wind.twd, st.wind.gustiness);
+  }
+
+  dispose(): void {
+    document.removeEventListener('fullscreenchange', this.onFullscreen);
+    this.windPop.close();
+    this.qualityPop.close();
   }
 
   /** Before the App reports its wind settings, show the live wind. */

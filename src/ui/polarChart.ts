@@ -32,7 +32,56 @@ const H = 290;
 const CX = 26;
 const CY = H / 2;
 const R = H / 2 - 24;
-const TRAIL_S = 6;
+/**
+ * Recent (|TWA|, speed) samples for the chart's trail. Fixed capacity (a ring buffer), at most `rateHz`
+ * samples per second of *simulated* time, and only the last `windowS` seconds are drawn — so a paused sim
+ * (frozen snapshot time) adds nothing, however long the pause (review I-4).
+ */
+export class TrailBuffer {
+  private readonly ang: Float32Array;
+  private readonly kn: Float32Array;
+  private readonly time: Float64Array;
+  private head = 0;
+  private count = 0;
+
+  constructor(readonly capacity = 160, readonly windowS = 6, readonly rateHz = 20) {
+    this.ang = new Float32Array(capacity);
+    this.kn = new Float32Array(capacity);
+    this.time = new Float64Array(capacity);
+  }
+
+  get size(): number { return this.count; }
+
+  push(t: number, twaAbs: number, knots: number): void {
+    if (this.count > 0) {
+      const last = this.time[(this.head - 1 + this.capacity) % this.capacity]!;
+      if (t < last) this.clear(); // the sim was reset
+      else if (t - last < 1 / this.rateHz) return; // paused, or too soon after the last sample
+    }
+    this.ang[this.head] = twaAbs;
+    this.kn[this.head] = knots;
+    this.time[this.head] = t;
+    this.head = (this.head + 1) % this.capacity;
+    this.count = Math.min(this.count + 1, this.capacity);
+  }
+
+  /** Oldest → newest samples younger than the window; `f` runs 0 (oldest kept) → 1 (newest). */
+  forEach(now: number, fn: (twaAbs: number, knots: number, f: number) => void): void {
+    const start = (this.head - this.count + this.capacity) % this.capacity;
+    let first = 0;
+    while (first < this.count && now - this.time[(start + first) % this.capacity]! > this.windowS) first++;
+    const n = this.count - first;
+    for (let i = 0; i < n; i++) {
+      const j = (start + first + i) % this.capacity;
+      fn(this.ang[j]!, this.kn[j]!, n > 1 ? i / (n - 1) : 1);
+    }
+  }
+
+  clear(): void {
+    this.head = 0;
+    this.count = 0;
+  }
+}
 
 export class PolarChart {
   readonly el: HTMLElement;
@@ -47,7 +96,7 @@ export class PolarChart {
   private layer: HTMLCanvasElement | null = null;
   private layerKey = '';
   private scaleKn = 8;
-  private readonly trail: { a: number; kn: number; t: number }[] = [];
+  private readonly trail = new TrailBuffer();
 
   constructor(onClose: () => void) {
     this.canvas = h('canvas', { class: 'sx-polar-canvas', attrs: { 'aria-hidden': 'true' } });
@@ -78,14 +127,12 @@ export class PolarChart {
     this.shown = on;
     this.el.hidden = !on;
     this.acc = Infinity;
+    if (!on) this.trail.clear();
   }
 
   update(snap: SimSnapshot, dt: number): void {
-    const a = Math.abs(snap.wind.twa);
-    const kn = toKn(snap.boat.speed);
-    this.trail.push({ a, kn, t: snap.t });
-    while (this.trail.length && (snap.t - this.trail[0]!.t > TRAIL_S || this.trail[0]!.t > snap.t)) this.trail.shift();
     if (!this.shown) return;
+    this.trail.push(snap.t, Math.abs(snap.wind.twa), toKn(snap.boat.speed));
     this.acc += dt;
     if (this.acc < 1 / 8) return;
     this.acc = 0;
@@ -115,15 +162,13 @@ export class PolarChart {
       const r = (Math.min(k, this.scaleKn) / this.scaleKn) * R;
       return [CX + r * Math.sin(ang), CY - r * Math.cos(ang)];
     };
-    const n = this.trail.length;
-    for (let i = 0; i < n - 1; i++) {
-      const p = this.trail[i]!;
-      const [x, y] = pt(p.a, p.kn);
-      g.fillStyle = `rgba(255, 170, 90, ${(0.08 + 0.35 * (i / n)).toFixed(3)})`;
+    this.trail.forEach(snap.t, (a, kn, f) => {
+      const [x, y] = pt(a, kn);
+      g.fillStyle = `rgba(255, 170, 90, ${(0.08 + 0.35 * f).toFixed(3)})`;
       g.beginPath();
       g.arc(x, y, 1.6, 0, Math.PI * 2);
       g.fill();
-    }
+    });
     const [bx, by] = pt(Math.abs(snap.wind.twa), toKn(snap.boat.speed));
     g.fillStyle = '#ff7a1a';
     g.strokeStyle = '#fff';

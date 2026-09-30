@@ -9,3 +9,4 @@ snaps/
 .DS_Store
 .vite/
 .scratch/
+.claude/worktrees/

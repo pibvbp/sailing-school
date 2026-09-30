@@ -8,7 +8,8 @@
 //   const input = new InputController(app, window); hud.attachInput(input);
 //   const runner = new LessonRunner(curriculum, app, hud.lessonPanel);
 //   hud.setControlFilter((k) => runner.isLive(k));          // also gates the keyboard
-//   per frame: input.update(dt); …sim…; hud.update(snapshot, dt); runner.update(snapshot, simOrFrameDt);
+//   per frame: input.update(dt); …sim…; hud.update(snapshot, dt); runner.update(snapshot, dt);
+//              (dt = real frame seconds everywhere; the runner measures holds/idle on snapshot.t, so pauses don't count)
 //   App.setCamera/setMode/togglePause/setTimeScale/setWind/…: call hud.syncState({...}) so the HUD shows
 //   changes made by lessons or code (changes made from the HUD itself are reflected immediately).
 import './styles.css';
@@ -78,6 +79,8 @@ export class Hud {
   private readonly pip: HTMLElement;
   private readonly pill: HTMLElement;
   private readonly pillText: TextSlot;
+  private readonly nav: HTMLElement;
+  private readonly tips: { hide(): void; dispose(): void };
   private readonly navButtons = new Map<Sheet, HTMLButtonElement>();
   private readonly textGate = new RateGate(15);
   private readonly compactMq: MediaQueryList | null;
@@ -129,6 +132,8 @@ export class Hud {
       toggleFullscreen: () => this.toggleFullscreen(),
     });
     this.help = new HelpDialog(root);
+    this.help.modal.onToggle = () => this.onModalToggle();
+    this.settings.modal.onToggle = () => this.onModalToggle();
     this.topBar = new TopBar(root, {
       setMode: (m) => this.setMode(m),
       togglePause: () => this.commands.togglePause(),
@@ -156,7 +161,7 @@ export class Hud {
     this.instruments.dialSlot.append(this.dial.el);
     this.instruments.setPolar(null);
 
-    const nav = h('nav', { class: 'sx-mnav sx-glass', attrs: { 'aria-label': 'Panels' } }, (['lesson', 'trim', 'view'] as const).map((s) => {
+    this.nav = h('nav', { class: 'sx-mnav sx-glass', attrs: { 'aria-label': 'Panels' } }, (['lesson', 'trim', 'view'] as const).map((s) => {
       const b = button(s === 'lesson' ? 'Lesson' : s === 'trim' ? 'Trim' : 'View', {
         icon: s === 'lesson' ? 'book' : s === 'trim' ? 'sliders' : 'layers',
         class: 'sx-mnav-btn',
@@ -182,18 +187,20 @@ export class Hud {
     this.touch.el.classList.add('sx-pass');
     this.toasts.el.classList.add('sx-pass');
     root.append(
-      this.left, this.right, this.instruments.el, this.view, this.touch.el, nav, this.lessonPanel.peek,
+      this.left, this.right, this.instruments.el, this.view, this.touch.el, this.nav, this.lessonPanel.peek,
       this.pip, this.pill, this.toasts.el, this.polar.el, this.topBar.el,
     );
     // Popovers, dialogs and the tooltip were appended by their constructors: keep them on top.
     for (const el of Array.from(root.querySelectorAll(':scope > .sx-pop, :scope > .sx-modal'))) root.append(el);
-    this.cleanup.push(installGlossaryTips(root));
+    this.tips = installGlossaryTips(root);
+    this.cleanup.push(() => this.tips.dispose(), () => this.topBar.dispose());
 
     this.compactMq = typeof matchMedia === 'function' ? matchMedia(COMPACT_QUERY) : null;
     this.compact = this.compactMq?.matches ?? false;
     const onCompact = () => {
       this.compact = this.compactMq?.matches ?? false;
       this.closeSheet();
+      this.applyInert();
       this.pipDirty = true;
       this.textGate.force();
     };
@@ -205,6 +212,7 @@ export class Hud {
 
     this.applyMode();
     this.syncAll();
+    this.applyInert();
   }
 
   // ---- public API -----------------------------------------------------------------------------------
@@ -254,6 +262,7 @@ export class Hud {
   /** Route keyboard UI commands through the HUD and let the on-screen tiller share the self-centring. */
   attachInput(input: InputController): void {
     this.input = input;
+    input.setSuspended(this.modalOpen());
     input.setCommands(this.commands);
     input.setControlFilter(this.filter);
     input.tillerMode = this.state.tillerMode;
@@ -310,6 +319,7 @@ export class Hud {
 
   dispose(): void {
     for (const c of this.cleanup) c();
+    this.input?.setSuspended(false);
     this.input?.setCommands(null);
     this.root.replaceChildren();
     this.root.classList.remove('sx-root');
@@ -348,6 +358,7 @@ export class Hud {
         this.help.toggle();
       },
       escape: () => {
+        this.tips.hide();
         if (Popover.closeAll()) return;
         if (this.help.open) { this.help.close(); return; }
         if (this.settings.modal.open) { this.settings.modal.close(); return; }
@@ -448,6 +459,7 @@ export class Hud {
     setClass(this.root, 'sx-left-collapsed', on);
     this.left.querySelector('.sx-dock-tab')?.setAttribute('aria-expanded', String(!on));
     this.pipDirty = true;
+    this.applyInert();
   }
 
   private setRightCollapsed(on: boolean): void {
@@ -456,6 +468,43 @@ export class Hud {
     this.right.querySelector('.sx-dock-tab')?.setAttribute('aria-expanded', String(!on));
     this.pipDirty = true;
     this.textGate.force();
+    this.applyInert();
+  }
+
+  private modalOpen(): boolean {
+    return this.help.open || this.settings.modal.open;
+  }
+
+  /** A dialog opened or closed: its keys are its own (I-1) and everything behind it is inert (focus trap). */
+  private onModalToggle(): void {
+    const open = this.modalOpen();
+    this.input?.setSuspended(open);
+    if (open) {
+      Popover.closeAll();
+      this.tips.hide();
+    }
+    this.applyInert();
+  }
+
+  /** Hidden panels leave the tab order; an open dialog makes the rest of the HUD inert. */
+  private applyInert(): void {
+    const modal = this.modalOpen();
+    const parts: HTMLElement[] = [
+      this.left, this.right, this.view, this.instruments.el, this.touch.el, this.nav, this.lessonPanel.peek,
+      this.pip, this.pill, this.toasts.el, this.polar.el, this.topBar.el,
+      ...Array.from(this.root.querySelectorAll<HTMLElement>(':scope > .sx-pop')),
+    ];
+    for (const el of parts) if (el.inert !== modal) el.inert = modal;
+    // The dock tabs stay reachable: only the contents of a collapsed dock / closed sheet go inert.
+    const hide = (dock: HTMLElement, closed: boolean) => {
+      for (const part of dock.querySelectorAll<HTMLElement>(':scope > .sx-dock-body, :scope > .sx-sheet-head')) {
+        if (part.inert !== closed) part.inert = closed;
+      }
+    };
+    const c = this.compact;
+    hide(this.left, c ? this.sheet !== 'lesson' : this.leftCollapsed);
+    hide(this.right, c ? this.sheet !== 'trim' : this.rightCollapsed);
+    hide(this.view, c && this.sheet !== 'view');
   }
 
   private toggleSheet(s: Sheet): void {
@@ -475,6 +524,7 @@ export class Hud {
       setClass(this.navButtons.get(k)!, 'is-on', k === s);
     }
     this.textGate.force();
+    this.applyInert();
   }
 
   private closeSheet(): void {
@@ -484,6 +534,7 @@ export class Hud {
       this.navButtons.get(k)?.setAttribute('aria-expanded', 'false');
       setClass(this.navButtons.get(k)!, 'is-on', false);
     }
+    this.applyInert();
   }
 
   private applyMode(): void {
@@ -500,6 +551,9 @@ export class Hud {
     this.settings.sync(this.state);
     this.overlayBar.sync(this.state.camera, this.app.overlays(), this.polar.visible);
     setClass(this.root, 'sx-paused', this.state.paused);
+    // Low tier: drop backdrop blur (the costliest HUD effect on weak GPUs) for opaque panels.
+    const q = this.state.quality;
+    setClass(this.root, 'sx-lowfx', q === 'low' || (q === 'auto' && this.state.qualityActual === 'low'));
     const slow = this.state.timeScale !== 1;
     const label = this.state.paused ? 'Paused — Space to resume' : slow ? `${this.state.timeScale}× ${this.state.timeScale < 1 ? 'slow motion' : 'speed'}` : '';
     this.pillText.set(label);

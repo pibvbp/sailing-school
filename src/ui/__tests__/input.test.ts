@@ -369,6 +369,79 @@ describe('InputController: focus and typing', () => {
   });
 });
 
+describe('InputController: dialogs, stuck keys, locked controls', () => {
+  const log: string[] = [];
+  const cmds: UiCommands = {
+    togglePause: () => log.push('pause'), stepTimeScale: (d) => log.push(`scale${d}`), setCamera: (c) => log.push(`cam:${c}`),
+    cycleCamera: () => log.push('cycle'), toggleOverlay: (k) => log.push(`ov:${k}`), toggleHelp: () => log.push('help'),
+    escape: () => log.push('esc'), notify: (m) => log.push(`note:${m}`),
+  };
+  beforeEach(() => { log.length = 0; input.setCommands(cmds); });
+
+  it('while a dialog is open, sailing keys are ignored and left to the dialog (no preventDefault); ? and Esc still work', () => {
+    down('ArrowRight');
+    run(0.25);
+    expect(app.controls.tiller).toBeCloseTo(0.5, 5);
+    input.setSuspended(true); // releases the held key
+    run(0.25);
+    expect(app.controls.tiller).toBeCloseTo(0, 5); // self-centred, not steering
+    const arrow = down('ArrowDown');
+    const space = down(' ');
+    down('w');
+    down('t');
+    run(0.5);
+    expect(arrow.defaultPrevented).toBe(false);
+    expect(space.defaultPrevented).toBe(false);
+    expect(app.controls.jibSheet).toBe(0.7);
+    expect(app.controls.mainSheet).toBe(0.7);
+    expect(app.controls.command).toBeNull();
+    down('?', { shiftKey: true });
+    down('Escape');
+    expect(log).toEqual(['help', 'esc']);
+    input.holdTiller(0.8);
+    run(0.1);
+    expect(app.controls.tiller).toBe(0);
+    input.setSuspended(false);
+    up('w');
+    down('w');
+    run(1);
+    expect(app.controls.mainSheet).toBeCloseTo(1, 5);
+  });
+
+  it('a key pressed with ⌘ (or whose keyup is swallowed) cannot stay stuck', () => {
+    down('ArrowLeft');
+    run(0.2);
+    down('Tab', { metaKey: true }); // Cmd-Tab away: macOS never sends the ArrowLeft keyup
+    run(1);
+    expect(app.controls.tiller).toBe(0);
+    down('ArrowLeft');
+    target.fire('visibilitychange', {});
+    run(1);
+    expect(app.controls.tiller).toBe(0);
+  });
+
+  it('a tiller locked by the lesson self-centres instead of freezing (even in sticky mode)', () => {
+    input.tillerMode = 'sticky';
+    down('a');
+    run(0.3);
+    up('a');
+    expect(app.controls.tiller).toBeCloseTo(-0.6, 5);
+    input.setControlFilter((k) => k !== 'tiller');
+    run(0.5);
+    expect(app.controls.tiller).toBe(0);
+  });
+
+  it('a focused radio group owns the arrow keys and Space', () => {
+    const radio = { tagName: 'BUTTON', isContentEditable: false, getAttribute: (n: string) => (n === 'role' ? 'radio' : null) } as unknown as EventTarget;
+    expect(focusKind(radio)).toBe('group');
+    down('ArrowRight', { target: radio });
+    down(' ', { target: radio });
+    run(0.25);
+    expect(app.controls.tiller).toBe(0);
+    expect(log).toEqual([]);
+  });
+});
+
 describe('InputController: auto-trim hand-over and lesson gating', () => {
   it('trimming a sail by key takes it off crew auto-trim and says so', () => {
     const notes: string[] = [];
@@ -403,9 +476,11 @@ describe('InputController: auto-trim hand-over and lesson gating', () => {
 
   it('dispose removes its listeners', () => {
     expect(target.count('keydown')).toBe(1);
+    expect(target.count('visibilitychange')).toBe(1);
     input.dispose();
     expect(target.count('keydown')).toBe(0);
     expect(target.count('keyup')).toBe(0);
     expect(target.count('blur')).toBe(0);
+    expect(target.count('visibilitychange')).toBe(0);
   });
 });

@@ -5,7 +5,7 @@ import type { QualityTier } from '../render/core/types';
 import { DEG } from '../shared/math';
 import { fromDeg, fromKn, toKn } from '../shared/units';
 import { TIME_SCALES } from './input';
-import { button, compassName, fmtClock, h, Modal, Segmented, Slider, throttle, Toggle } from './dom';
+import { button, compassName, fmtClock, h, Modal, Segmented, Slider, throttle, throttleMerge, Toggle } from './dom';
 import type { HudState } from './Hud';
 
 export const GUST_WORDS = ['steady', 'light gusts', 'moderate gusts', 'gusty', 'squally'] as const;
@@ -24,7 +24,8 @@ export class WindControls {
   private readonly period: Slider;
 
   constructor(setWind: (p: Partial<WindSettings>) => void) {
-    const send = throttle(setWind, THROTTLE_MS);
+    // One throttle for five sliders: partials are merged so a {tws} change is never dropped by a {twd} one.
+    const send = throttleMerge(setWind, THROTTLE_MS);
     this.tws = new Slider({ label: 'Wind speed', term: 'true-wind', min: 4, max: 25, step: 0.5, format: (v) => `${v.toFixed(v % 1 ? 1 : 0)} kn`, onInput: (v) => send({ tws: fromKn(v) }) });
     this.dir = new Slider({ label: 'From', min: 0, max: 355, step: 5, format: (v) => `${Math.round(v)}° ${compassName(v)}`, onInput: (v) => send({ twd: fromDeg(v) }) });
     this.gust = new Slider({ label: 'Gusts', term: 'gust', min: 0, max: 1, step: 0.05, format: gustWord, onInput: (v) => send({ gustiness: v }) });

@@ -218,8 +218,12 @@ export function textHtml(text: string): string {
   return glossaryHtml(escapeHtml(text));
 }
 
-/** One shared definition card for every `.sx-gloss` term inside `root` (hover, focus or tap). */
-export function installGlossaryTips(root: HTMLElement): () => void {
+/**
+ * One shared definition card for every `.sx-gloss` term inside `root`: shown on hover, focus or tap; hidden on
+ * pointer-out, blur, a tap elsewhere, Esc (via `hide`) and scrolling. A tap never closes the card it just opened
+ * (touch browsers focus the term first, then deliver the click).
+ */
+export function installGlossaryTips(root: HTMLElement): { hide(): void; dispose(): void } {
   const tip = h('div', { class: 'sx-tip', attrs: { role: 'tooltip', id: 'sx-gloss-tip', hidden: true } }, [
     h('div', 'sx-tip-term'),
     h('div', 'sx-tip-def'),
@@ -264,20 +268,28 @@ export function installGlossaryTips(root: HTMLElement): () => void {
   const tap = (e: MouseEvent) => {
     const t = termOf(e);
     if (!t) { if (current) hide(); return; }
-    if (current === t) hide(); else show(t);
+    if (current !== t) show(t);
   };
+  const scrolled = () => { if (current) hide(); };
   root.addEventListener('pointerover', over);
   root.addEventListener('pointerout', out);
   root.addEventListener('focusin', focusIn);
   root.addEventListener('focusout', focusOut);
   root.addEventListener('click', tap);
-  return () => {
-    root.removeEventListener('pointerover', over);
-    root.removeEventListener('pointerout', out);
-    root.removeEventListener('focusin', focusIn);
-    root.removeEventListener('focusout', focusOut);
-    root.removeEventListener('click', tap);
-    tip.remove();
+  root.addEventListener('scroll', scrolled, true);
+  addEventListener('resize', scrolled);
+  return {
+    hide: () => { if (current) hide(); },
+    dispose: () => {
+      root.removeEventListener('pointerover', over);
+      root.removeEventListener('pointerout', out);
+      root.removeEventListener('focusin', focusIn);
+      root.removeEventListener('focusout', focusOut);
+      root.removeEventListener('click', tap);
+      root.removeEventListener('scroll', scrolled, true);
+      removeEventListener('resize', scrolled);
+      tip.remove();
+    },
   };
 }
 
@@ -397,8 +409,6 @@ export class Slider {
     setClass(this.el, 'is-auto', on);
   }
 
-  get held(): boolean { return this.dragging; }
-
   private paint(v: number): void {
     this.last = v;
     const { min, max, bipolar } = this.o;
@@ -407,8 +417,10 @@ export class Slider {
     const hi = bipolar ? Math.max(50, p) : p;
     this.input.style.setProperty('--lo', `${lo.toFixed(1)}%`);
     this.input.style.setProperty('--hi', `${hi.toFixed(1)}%`);
-    this.value?.set(this.o.format!(v));
-    if (this.o.ariaText) this.input.setAttribute('aria-valuetext', this.o.ariaText(v));
+    const text = this.o.format?.(v);
+    if (text !== undefined) this.value?.set(text);
+    const aria = this.o.ariaText?.(v) ?? text;
+    if (aria !== undefined) this.input.setAttribute('aria-valuetext', aria);
   }
 }
 
@@ -423,6 +435,20 @@ export class Segmented<T extends string> {
 
   constructor(label: string, items: SegItem<T>[], onPick: (v: T) => void, cls = '') {
     this.el = h('div', { class: `sx-seg ${cls}`.trim(), attrs: { role: 'radiogroup', 'aria-label': label } });
+    // Radio-group keyboard model: one tab stop, arrows move (and pick), Home/End jump.
+    this.el.addEventListener('keydown', (e) => {
+      const keys = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'];
+      if (!keys.includes(e.key)) return;
+      const list = [...this.buttons.entries()].filter(([, b]) => !b.disabled);
+      if (!list.length) return;
+      e.preventDefault();
+      const at = list.findIndex(([, b]) => b === document.activeElement);
+      const i = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1
+        : (Math.max(0, at) + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length;
+      const [value, b] = list[i]!;
+      b.focus();
+      onPick(value);
+    });
     for (const it of items) {
       const b = h('button', {
         class: 'sx-seg-btn',
@@ -444,7 +470,13 @@ export class Segmented<T extends string> {
   set(v: T | null): void {
     if (v === this.current) return;
     this.current = v;
-    for (const [k, b] of this.buttons) b.setAttribute('aria-checked', String(k === v));
+    const any = v !== null && this.buttons.has(v);
+    let first = true;
+    for (const [k, b] of this.buttons) {
+      b.setAttribute('aria-checked', String(k === v));
+      b.tabIndex = (any ? k === v : first) ? 0 : -1;
+      first = false;
+    }
   }
 
   setEnabled(on: boolean): void {
@@ -563,6 +595,8 @@ export class Modal {
   private readonly card: HTMLElement;
   private shown = false;
   private returnFocus: HTMLElement | null = null;
+  /** Called after the dialog opens and before focus is restored on close (the Hud suspends keys and sets inert). */
+  onToggle: ((open: boolean) => void) | null = null;
 
   constructor(host: HTMLElement, title: string, cls = '') {
     const titleId = `sx-m-${Math.random().toString(36).slice(2, 9)}`;
@@ -595,6 +629,7 @@ export class Modal {
     const active = document.activeElement;
     this.returnFocus = active instanceof HTMLElement ? active : null;
     this.el.hidden = false;
+    this.onToggle?.(true);
     requestAnimationFrame(() => this.el.classList.add('is-in'));
     this.card.focus({ preventScroll: true });
   }
@@ -604,6 +639,7 @@ export class Modal {
     this.shown = false;
     this.el.classList.remove('is-in');
     this.el.hidden = true;
+    this.onToggle?.(false);
     this.returnFocus?.focus({ preventScroll: true });
     this.returnFocus = null;
   }
@@ -633,5 +669,19 @@ export function throttle<A extends unknown[]>(fn: (...args: A) => void, ms: numb
       if (pending) fn(...pending);
       pending = null;
     }, ms - (now - last));
+  };
+}
+
+/** Like throttle, for partial-update calls: partials that arrive inside the window are merged, none is lost. */
+export function throttleMerge<T extends object>(fn: (p: T) => void, ms: number): (p: T) => void {
+  let pending: T | null = null;
+  const flush = throttle(() => {
+    const p = pending;
+    pending = null;
+    if (p) fn(p);
+  }, ms);
+  return (p: T) => {
+    pending = pending ? { ...pending, ...p } : { ...p };
+    flush();
   };
 }

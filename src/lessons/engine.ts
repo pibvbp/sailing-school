@@ -296,6 +296,7 @@ export class LessonRunner {
   }
 
   exit(): void {
+    this.pending = null;
     this.leaveStep();
     this.lesson = null;
     this.phase = 'idle';

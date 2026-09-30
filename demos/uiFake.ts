@@ -467,7 +467,7 @@ export const demoLessons: Lesson[] = [
   stub('sail-is-a-wing', 'How a sail works', 'A sail is a wing', 'Lift, drag, angle of attack, luffing and stall in the sail lab.'),
   stub('drive-and-heel', 'How a sail works', 'Drive and heel', 'The same sail force splits differently on each point of sail.'),
   {
-    id: 'jib-and-telltales',
+    id: 'jib-telltales',
     module: 'How a sail works',
     title: 'Jib and telltales',
     summary: 'The groove: ease till the windward telltale lifts, trim till it streams.',
@@ -494,7 +494,7 @@ export const demoLessons: Lesson[] = [
   },
   stub('mainsail-trim', 'How a sail works', 'Mainsail trim and twist', 'Boom angle, traveler, leech telltales and twist.'),
   stub('main-and-jib', 'How a sail works', 'Main and jib together', 'Upwash, downwash and backwinding — why the "venturi" story is wrong.'),
-  stub('keel-leeway-balance', 'Boat handling', 'Keel, leeway and balance', 'Keel lift, heeling vs righting moment and weather helm.'),
+  stub('keel-and-balance', 'Boat handling', 'Keel, leeway and balance', 'Keel lift, heeling vs righting moment and weather helm.'),
   stub('tacking', 'Boat handling', 'Tacking', 'The sequence and the calls; keeping momentum.'),
   stub('getting-out-of-irons', 'Boat handling', 'Getting out of irons', 'Back the jib, push the boom, reverse steering.'),
   stub('gybing', 'Boat handling', 'Gybing', 'Controlled versus accidental gybes.'),
