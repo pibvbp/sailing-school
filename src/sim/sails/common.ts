@@ -52,6 +52,13 @@ export interface SectionOptions {
   alphaOverride?: (alphaGeom: number, flow: Vec3, chordDir: Vec3) => number;
   /** Multiplier on lift (e.g. spinnaker efficiency). */
   liftScale?: number;
+  /**
+   * The sail's own swing rate (rad/s, + turning forward toward starboard) about a vertical axis through
+   * `rotationAxis` (default: the section's luff). Moving cloth meets the air — this is the strong
+   * aerodynamic damping that stops a boom or clew from oscillating.
+   */
+  rotationRate?: number;
+  rotationAxis?: { x: number; y: number };
 }
 
 /** Flow at a body point: unit direction and speed in the rig plane. */
@@ -65,7 +72,16 @@ export function flowAt(point: Vec3, air: AirContext): { flow: Vec3; speed: numbe
 export function evaluateSection(g: SectionGeom, p: SailAeroParams, air: AirContext, opt: SectionOptions = {}): SectionResult {
   const c = g.chordDir;
   const cp = { x: g.luff.x + c.x * 0.38 * g.chord, y: g.luff.y + c.y * 0.38 * g.chord, z: g.luff.z };
-  const { flow: w, speed } = flowAt(cp, air);
+  const hWorld = -rotX(cp, air.kin.heel).z;
+  const a = airVelocityBody(cp, air.kin, air.windAt(hWorld));
+  if (opt.rotationRate) {
+    const axis = opt.rotationAxis ?? g.luff;
+    const w0 = opt.rotationRate;
+    a.x += w0 * (cp.y - axis.y);   // subtract the cloth's own velocity ω × r = (−ω·dy, ω·dx)
+    a.y -= w0 * (cp.x - axis.x);
+  }
+  const speed = Math.hypot(a.x, a.y);
+  const w = speed > 1e-6 ? { x: a.x / speed, y: a.y / speed, z: 0 } : { x: -1, y: 0, z: 0 };
 
   const cw = c.x * w.x + c.y * w.y;
   const cross = c.x * w.y - c.y * w.x;
@@ -237,7 +253,7 @@ export function luffTelltales(prefix: string, sections: readonly SailSection[], 
     const s = sectionAt(sections, h);
     const aL = alphaLuff(p, s.camber, s.draft);
     const aS = alphaStall(p, s.camber, s.draft);
-    const leSep = aL + 0.55 * (aS - aL);
+    const leSep = aL + 0.8 * (aS - aL);
     const pos = surfacePoint(s, 0.12);
     const lift = 1 - smoothstep(aL, aL + 2.5 * DEG, s.aoa);
     const stall = smoothstep(leSep, leSep + 3 * DEG, s.aoa);

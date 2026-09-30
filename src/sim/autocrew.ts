@@ -3,12 +3,12 @@
 // telltales / luff curl — and eases or trims the sheet toward the groove.
 import { DEG, clamp, lerp, smoothstep } from '../shared/math';
 import type { HelmMode, SimSnapshot } from './types';
-import { MAIN_AERO, JIB_AERO, alphaLuff, alphaStall, SPIN_AERO } from './aero';
+import { MAIN_AERO, JIB_AERO, alphaLuff, alphaStall } from './aero';
+import { ALPHA_CURL } from './sails/spinnaker';
 import type { CrewHook, Simulation } from './simulation';
 import type { SectionResult } from './sails/common';
 
 const KN = 0.514444;
-const SPIN_CURL = alphaLuff(SPIN_AERO, 0.26, 0.45);
 
 type Phase = 'turn' | 'settle' | 'prep' | 'cross';
 
@@ -16,6 +16,16 @@ interface Entry { helmMode: HelmMode; helmTarget: number; speed: number; tiller:
 
 const mean = (xs: readonly SectionResult[], f: (s: SectionResult) => number): number =>
   xs.length ? xs.reduce((a, s) => a + f(s), 0) / xs.length : 0;
+
+/** First-order low-pass (τ = 1 s). */
+const smooth = (prev: number | null, x: number, dt: number): number => (prev === null ? x : prev + (x - prev) * Math.min(1, dt / 1.0));
+
+/** Sheet speed (per s) from an angle-of-attack error (rad): dead-band ±0.75°, gentle gain, rate-limited. */
+const trimRate = (err: number): number => {
+  const dead = 0.75 * DEG;
+  if (Math.abs(err) < dead) return 0;
+  return clamp((err - Math.sign(err) * dead) * 1.2, -0.4, 0.4);
+};
 
 export class AutoCrew implements CrewHook {
   maneuver: SimSnapshot['maneuver'] = null;
@@ -28,6 +38,10 @@ export class AutoCrew implements CrewHook {
   private targetTwa = 0;
   private entry: Entry = { helmMode: 'manual', helmTarget: 0, speed: 0, tiller: 0 };
   private hoistPrev: boolean | null = null;
+  /** Smoothed angle-of-attack readings (a trimmer doesn't chase every flicker of a telltale). */
+  private aoaMain: number | null = null;
+  private aoaJib: number | null = null;
+  private aoaSpin: number | null = null;
 
   update(dt: number, sim: Simulation): void {
     const c = sim.controls;
@@ -156,13 +170,14 @@ export class AutoCrew implements CrewHook {
       const dr = mean(mid, (s) => s.draft);
       const aL = alphaLuff(MAIN_AERO, cam, dr);
       const aS = alphaStall(MAIN_AERO, cam, dr);
-      let target = lerp(aS - 1.5 * DEG, aL + 0.55 * (aS - aL), upwind);
+      let target = lerp(aS - 1.5 * DEG, aL + 0.85 * (aS - aL), upwind);
       // Depower when over-pressed: ease toward the luffing edge as heel builds.
       target -= smoothstep(18, 30, heelDeg) * Math.max(target - aL + DEG, 0);
-      const err = target - mean(mid, (s) => s.aoa);
-      c.mainSheet = clamp(c.mainSheet + clamp(err * 2.5, -0.6, 0.6) * dt, 0, 1);
+      this.aoaMain = smooth(this.aoaMain, mean(mid, (s) => s.aoa), dt);
+      c.mainSheet = clamp(c.mainSheet + trimRate(target - this.aoaMain) * dt, 0, 1);
       c.traveler = upwind > 0.5 ? -0.8 * smoothstep(20, 30, heelDeg) : 0;
-      c.vang = upwind > 0.5 ? 0.3 : 0.55;
+      // Upwind in light/moderate air keep the leech firm (little twist); open it as the breeze builds.
+      c.vang = upwind > 0.5 ? lerp(0.55, 0.3, smoothstep(10, 18, twsKn)) : 0.55;
       const flat = upwind * smoothstep(14, 22, twsKn);
       c.outhaul = 0.3 + 0.7 * flat;
       c.backstay = 0.2 + 0.8 * flat;
@@ -175,16 +190,17 @@ export class AutoCrew implements CrewHook {
       const dr = mean(mid, (s) => s.draft);
       const aL = alphaLuff(JIB_AERO, cam, dr);
       const aS = alphaStall(JIB_AERO, cam, dr);
-      const err = aL + 0.5 * (aS - aL) - mean(mid, (s) => s.aoa);
-      c.jibSheet = clamp(c.jibSheet + clamp(err * 2.5, -0.6, 0.6) * dt, 0, 1);
-      c.jibLead = 0;
+      this.aoaJib = smooth(this.aoaJib, mean(mid, (s) => s.aoa), dt);
+      c.jibSheet = clamp(c.jibSheet + trimRate(aL + 0.75 * (aS - aL) - this.aoaJib) * dt, 0, 1);
+      // Lead forward upwind (tight leech, full foot); aft when reaching or depowering (open leech).
+      c.jibLead = upwind > 0.5 ? 0.6 - 1.2 * smoothstep(18, 28, heelDeg) : -0.3;
     }
 
     if (c.autoTrim.spinnaker && sim.spin.hoist > 0.5) {
       c.spinPole = clamp((awaAbs / DEG - 90) / 90 + 0.05, 0, 1);
       c.spinPoleHeight = 0.4;
-      const err = SPIN_CURL + 2.5 * DEG - sim.spin.alphaTrim;
-      c.spinSheet = clamp(c.spinSheet + clamp(err * 2.0, -0.5, 0.5) * dt, 0, 1);
+      this.aoaSpin = smooth(this.aoaSpin, sim.spin.alphaTrim, dt);
+      c.spinSheet = clamp(c.spinSheet + trimRate(ALPHA_CURL + 2.5 * DEG - this.aoaSpin) * dt, 0, 1);
     }
   }
 }

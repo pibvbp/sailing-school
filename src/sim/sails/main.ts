@@ -89,9 +89,10 @@ export class MainModel {
   }
 
   /** Forces for a given boom angle and twist (no state change) — used by the dynamics, tests and VPP. */
-  evaluate(c: Controls, beta: number, twist: number, air: AirContext, shift: MainShift, blanket = 1): MainEvaluation {
+  evaluate(c: Controls, beta: number, twist: number, air: AirContext, shift: MainShift, blanket = 1, betaDot = 0): MainEvaluation {
+    const axis = { x: G.x, y: 0 };
     const sections = this.geometry(c, beta, twist).map((g) =>
-      evaluateSection(g, MAIN_AERO, air, { alphaShift: shift.main, visualShift: shift.mainLuff, blanket }));
+      evaluateSection(g, MAIN_AERO, air, { alphaShift: shift.main, visualShift: shift.mainLuff, blanket, rotationRate: betaDot, rotationAxis: axis }));
     return {
       sections,
       sum: sumSections(sections, { x: 0, y: 0, z: -BOAT.mass.cgH }),
@@ -115,7 +116,7 @@ export class MainModel {
     const twistTarget = (2 + 20 * Math.pow(1 - tension, 1.3)) * DEG * loaded;
     this.twist += (twistTarget - this.twist) * Math.min(1, dt / 0.3);
 
-    const ev = this.evaluate(c, this.beta, this.twist, air, shift, blanket);
+    const ev = this.evaluate(c, this.beta, this.twist, air, shift, blanket, this.betaDot);
     this.last = ev;
     this.lastMoment = ev.mastMoment;
 
@@ -129,8 +130,9 @@ export class MainModel {
       const mid = ev.sections[Math.floor(ev.sections.length / 2)]!;
       m -= boomSide * smoothstep(12 * DEG, 22 * DEG, byLee) * 30 * mid.q * (ev.sum.area / BOAT.main.area);
     }
-    if (this.beta > hi) m += -SHEET_K * (this.beta - hi) - SHEET_C * Math.max(this.betaDot, 0);
-    else if (this.beta < lo) m += -SHEET_K * (this.beta - lo) - SHEET_C * Math.min(this.betaDot, 0);
+    // While the rope is stretched it damps both ways (rope hysteresis, block friction) — no elastic bounce.
+    if (this.beta > hi) m += -SHEET_K * (this.beta - hi) - SHEET_C * this.betaDot;
+    else if (this.beta < lo) m += -SHEET_K * (this.beta - lo) - SHEET_C * this.betaDot;
 
     const before = this.beta;
     const rateBefore = this.betaDot;

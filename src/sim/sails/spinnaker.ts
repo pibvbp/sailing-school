@@ -8,7 +8,7 @@
 import { BOAT } from '../../shared/boatSpec';
 import { DEG, clamp, lerp, smoothstep, wrapPi, type Vec3 } from '../../shared/math';
 import type { Controls, SpinnakerState } from '../types';
-import { SPIN_AERO, alphaLuff } from '../aero';
+import { SPIN_AERO } from '../aero';
 import { evaluateSection, sumSections, flowAt, type AirContext, type SailSum, type SectionGeom, type SectionResult } from './common';
 
 const S = BOAT.spinnaker;
@@ -21,7 +21,11 @@ const HOIST_S = 6;
 const DOUSE_S = 5;
 const POLE_TRANSFER_S = 6;
 const CAMBER = 0.26;
-const ALPHA_CURL = alphaLuff(SPIN_AERO, CAMBER, 0.45);
+/**
+ * Trim angle at which the luff starts to curl. It sits where the ORC-calibrated force is near its peak —
+ * so the real-world rule "ease until the luff just curls, then trim a touch" is also the fast trim here.
+ */
+export const ALPHA_CURL = 16 * DEG;
 /** A symmetric spinnaker's clew cannot fly ahead of the tack's beam line (the sheet leads aft). */
 const PSI_MIN = 95 * DEG;
 
@@ -201,10 +205,10 @@ export class SpinnakerModel {
 
     // Curl → collapse → refill state machine (only meaningful once the sail is up).
     const a = tr.alphaTrim;
-    this.curl = this.hoist > 0.85 ? 1 - smoothstep(ALPHA_CURL, ALPHA_CURL + 4 * DEG, a) : 0;
+    this.curl = this.hoist > 0.85 ? 1 - smoothstep(ALPHA_CURL - 2 * DEG, ALPHA_CURL + 3 * DEG, a) : 0;
     if (this.hoist > 0.85) {
-      this.lowT = a < ALPHA_CURL - 4 * DEG ? this.lowT + dt : 0;
-      this.highT = a > ALPHA_CURL + 2 * DEG ? this.highT + dt : 0;
+      this.lowT = a < ALPHA_CURL - 7 * DEG ? this.lowT + dt : 0;
+      this.highT = a > ALPHA_CURL - 3 * DEG ? this.highT + dt : 0;
       if (this.lowT > 0.6) this.collapseTarget = 1;
       if (this.highT > 1.0) this.collapseTarget = 0;
     } else {

@@ -24,12 +24,12 @@ export const BOAT = {
     freeboard: { bow: 0.98, mast: 0.8, min: 0.72, minX: -1.5, stern: 0.74 },
     deckCamber: 0.06,
     /** Canoe-body wetted surface (m²). */
-    wettedArea: 12.0,
+    wettedArea: 11.0,
     /** Hull lateral area used for cross-flow drag (m²). */
     lateralArea: 2.0,
     /** Projected windage areas (m²). */
-    windageSide: 6.0,
-    windageFront: 2.0,
+    windageSide: 5.0,
+    windageFront: 2.6,
   },
   mass: {
     boat: 1400,

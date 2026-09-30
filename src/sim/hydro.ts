@@ -16,9 +16,10 @@ export function frictionCf(V: number): number {
 }
 
 /** Residuary resistance per unit weight against Froude number (tuned by the polar tests). */
+// Light-displacement keelboat (LVR ≈ 5.5): gentle below Fn 0.35, steep wall from Fn 0.4; no planing.
 export const RR_TABLE: ReadonlyArray<readonly [number, number]> = [
-  [0, 0], [0.1, 1e-4], [0.15, 4e-4], [0.2, 1.1e-3], [0.25, 2.4e-3], [0.3, 4.7e-3], [0.35, 9.2e-3],
-  [0.4, 0.018], [0.45, 0.033], [0.5, 0.048], [0.55, 0.058], [0.6, 0.064], [0.7, 0.07], [1.0, 0.085],
+  [0, 0], [0.1, 1e-4], [0.15, 3e-4], [0.2, 8e-4], [0.25, 1.8e-3], [0.3, 3.5e-3], [0.35, 7.2e-3],
+  [0.4, 0.016], [0.45, 0.031], [0.5, 0.047], [0.55, 0.058], [0.6, 0.068], [0.7, 0.085], [0.8, 0.1], [1.0, 0.13],
 ];
 
 export function hullResistance(V: number, heel: number): { rf: number; rr: number; rh: number; total: number } {
@@ -130,8 +131,8 @@ export function crossFlow(v: number, r: number): { Y: number; N: number } {
 
 /** Point where hull, mast, rigging and crew windage acts (body frame). */
 export const WINDAGE_POINT: Vec3 = bodyPoint(0.3, 0, 2.5);
-const CDA_FRONT = 3.2;
-const CDA_SIDE = 6.5;
+const CDA_FRONT = 2.6;
+const CDA_SIDE = 5.0;
 
 /** Windage force (body frame) from the air velocity relative to the boat (body frame). */
 export function windage(airB: Vec3): Vec3 {

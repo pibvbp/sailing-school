@@ -87,10 +87,10 @@ export class JibModel {
     return out;
   }
 
-  evaluate(c: Controls, gamma: number, furl: number, air: AirContext, alphaShift: number, blanket = 1): JibEvaluation {
+  evaluate(c: Controls, gamma: number, furl: number, air: AirContext, alphaShift: number, blanket = 1, gammaDot = 0): JibEvaluation {
     const geom = this.geometry(c, gamma, furl);
     const q = furl > 0.97 ? 0 : blanket; // a furled jib is a tight roll on the forestay
-    const sections = geom.map((g) => evaluateSection(g, JIB_AERO, air, { alphaShift, blanket: q }));
+    const sections = geom.map((g) => evaluateSection(g, JIB_AERO, air, { alphaShift, blanket: q, rotationRate: gammaDot }));
     let luffMoment = 0;
     for (const r of sections) luffMoment += (r.point.x - r.luff.x) * r.force.y - (r.point.y - r.luff.y) * r.force.x;
     return { sections, sum: sumSections(sections, { x: 0, y: 0, z: -BOAT.mass.cgH }), luffMoment, clew: this.clewPoint(gamma, furl) };
@@ -128,12 +128,13 @@ export class JibModel {
     } else if (this.workingSide === 1) { this.sheetPort = working; this.sheetStbd = 0; }
     else { this.sheetStbd = working; this.sheetPort = 0; }
 
-    const ev = this.evaluate(c, this.gamma, this.furl, air, alphaShift, blanket);
+    const ev = this.evaluate(c, this.gamma, this.furl, air, alphaShift, blanket, this.gammaDot);
     this.last = ev;
     const { lo, hi } = this.limits(c, tackSign);
     let m = ev.luffMoment - AIR_DAMP * this.gammaDot;
-    if (this.gamma > hi) m += -SHEET_K * (this.gamma - hi) - SHEET_C * Math.max(this.gammaDot, 0);
-    else if (this.gamma < lo) m += -SHEET_K * (this.gamma - lo) - SHEET_C * Math.min(this.gammaDot, 0);
+    // While the rope is stretched it damps both ways (rope hysteresis, block friction) — no elastic bounce.
+    if (this.gamma > hi) m += -SHEET_K * (this.gamma - hi) - SHEET_C * this.gammaDot;
+    else if (this.gamma < lo) m += -SHEET_K * (this.gamma - lo) - SHEET_C * this.gammaDot;
     this.gammaDot += (m / I_CLEW) * dt;
     this.gamma = clamp(this.gamma + this.gammaDot * dt, -95 * DEG, 95 * DEG);
     return ev;

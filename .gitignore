@@ -8,3 +8,4 @@ snaps/
 *.log
 .DS_Store
 .vite/
+.scratch/

@@ -297,9 +297,12 @@ wave-driven heave/pitch/roll on top (§9.3).
 *same* force functions (Newton with numerical Jacobian); `bestSpeed` optimises trim (sheet angles,
 flatten, spinnaker vs jib). `scripts/polars.mjs` writes `src/sim/data/polars.json` (TWS 4–25 kn,
 TWA 30–180° step 2°). UI uses it for target speed and optimal VMG angles.
-**Plausibility targets (±12 %):** TWS 6 kn: beat 4.3 kn @ 44°, 90° 5.0, 150° (spinnaker) 4.3;
-TWS 12 kn: beat 5.6 @ 40°, 90° 6.5, 150° 6.4; TWS 20 kn: beat 5.9 @ 40°, 90° 7.0, 150° 7.9.
-Optimal upwind TWA 38–46°; no positive VMG below 30° TWA.
+**Plausibility bands** (J/24-class references; the polar is produced by sailing the simulated boat to
+steady state with the auto-crew, `src/sim/vpp.ts`): 6 kn — beat 3.2–4.6 kn, 90° 3.8–5.2, 150° 2.9–4.4;
+12 kn — beat 4.9–6.0, 90° 6.0–7.2, 150° 5.2–6.8; 20 kn — beat 5.0–6.3, 90° 7.0–8.6, 150° 7.0–8.8.
+Optimal upwind TWA 34–48°; VMG at 30° below the optimum; in light air the best downwind VMG is on a
+broad reach (so gybing downwind pays). Light-air broad reaching sits at the low end: running deep, the
+apparent wind collapses (≈ 2 m/s at 150° in 6 kn) and no rig of this size can drive the hull faster.
 
 ### 7.9 Snapshot contract (`src/sim/types.ts`)
 `SimSnapshot` is produced once per sim step (render interpolates the last two):

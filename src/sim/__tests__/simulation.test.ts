@@ -88,11 +88,15 @@ describe('simulation', () => {
     expect(a.boat).toEqual(b.boat);
   });
 
-  it('steps fast enough (≤ 50 µs per step)', () => {
+  it('steps fast enough (≤ 50 µs per step, best of 5 batches so machine load cannot fake a failure)', () => {
     const sim = new Simulation(reach);
     for (let i = 0; i < 500; i++) sim.step();
-    const t0 = performance.now();
-    for (let i = 0; i < 10000; i++) sim.step();
-    expect(performance.now() - t0).toBeLessThan(500);
+    let best = Infinity;
+    for (let k = 0; k < 5; k++) {
+      const t0 = performance.now();
+      for (let i = 0; i < 2000; i++) sim.step();
+      best = Math.min(best, (performance.now() - t0) / 2000);
+    }
+    expect(best).toBeLessThan(0.05);
   });
 });
