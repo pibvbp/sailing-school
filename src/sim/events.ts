@@ -60,7 +60,7 @@ export class EventDetector {
     this.luffT = luffing > 0.7 && Math.abs(s.twa) > 40 * DEG ? this.luffT + s.dt : 0;
     if (this.luffT > 2 && this.debounced('luffing', s.t, 12)) this.emit('luffing', s.t);
 
-    if (s.jibSet && s.mainLuffBubble > 0.45 && s.mainLeechFull && this.debounced('backwinded', s.t, 12)) {
+    if (s.jibSet && Math.abs(s.twa) > 30 * DEG && s.mainLuffBubble > 0.45 && s.mainLeechFull && this.debounced('backwinded', s.t, 12)) {
       this.emit('backwinded', s.t);
     }
   }

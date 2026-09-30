@@ -12,7 +12,7 @@ import { SpinnakerModel } from './sails/spinnaker';
 import { blanketFactor, interactionShifts, type AirContext } from './sails/common';
 import { kheff } from './aero';
 import { G, KEEL, RUDDER, WINDAGE_POINT, crossFlow, foilForce, hullResistance, rightingMoment, windage } from './hydro';
-import { helmCommand } from './autopilot';
+import { Helmsman } from './autopilot';
 import { EventDetector } from './events';
 
 export const DT = 1 / 120;
@@ -61,6 +61,9 @@ export class Simulation {
   spin!: SpinnakerModel;
   crew: CrewHook | null = null;
   events!: EventDetector;
+  /** Set by the crew during manoeuvres: steer with this rudder angle instead of the helm. */
+  rudderOverride: number | null = null;
+  private helmsman = new Helmsman();
   /** Latest derived quantities, available to the crew hook. */
   twa = 0;
   twd = 0;
@@ -86,6 +89,8 @@ export class Simulation {
     this.spin = new SpinnakerModel();
     this.events = new EventDetector();
     this.clPrev = { main: 1, jib: 1 };
+    this.rudderOverride = null;
+    this.helmsman = new Helmsman();
 
     // Start with the sails on the correct side for the wind.
     const twa = twaOf(this.boat.psi, init.wind.twd);
@@ -149,10 +154,12 @@ export class Simulation {
     this.updateDerived();
     this.crew?.update(dt, this);
 
-    // Helm → rudder (rate-limited, self-centring in manual).
-    const target = c.helmMode === 'manual'
-      ? clamp(c.tiller, -1, 1) * MAX_RUDDER
-      : helmCommand(c.helmMode, c.helmTarget, { heading: b.psi, twa: this.twa, awa: this.awa, r: b.r, speed: this.speed });
+    // Helm → rudder (rate-limited). The crew may override during manoeuvres.
+    const target = this.rudderOverride !== null
+      ? this.rudderOverride
+      : c.helmMode === 'manual'
+        ? clamp(c.tiller, -1, 1) * MAX_RUDDER
+        : this.helmsman.command(c.helmMode, c.helmTarget, { heading: b.psi, twa: this.twa, awa: this.awa, r: b.r, speed: this.speed }, dt);
     b.rudder += clamp(target - b.rudder, -RUDDER_RATE * dt, RUDDER_RATE * dt);
 
     // Crew weight: hike to windward when sailing across/up the wind, counter-balance downwind.
