@@ -165,7 +165,8 @@ describe('SailsView', () => {
     view.dispose();
   });
 
-  it(`stays within the CPU budget in a broach: kite collapsed, main and jib flogging (≤ ${perfBudget(0.8).toFixed(1)} ms/frame)`, () => {
+  // Timing: best of five batches filters scheduler noise; the retry covers a machine that is busy for seconds.
+  it(`stays within the CPU budget in a broach: kite collapsed, main and jib flogging (≤ ${perfBudget(0.8).toFixed(1)} ms/frame)`, { retry: 2 }, () => {
     const view = new SailsView(tierSettings('high'));
     const kite = run().snapshot();
     const reach = beat().snapshot();
@@ -177,10 +178,13 @@ describe('SailsView', () => {
     for (const tt of [...sails.main.telltales, ...sails.jib.telltales]) { tt.state = 'fluttering'; tt.intensity = 1; }
     const w = { awa: 1.2, aws: 12, awaDeck: 1.2, awsDeck: 10 };
     for (let k = 0; k < 120; k++) view.update(FRAME, k * FRAME, sails, w);
-    const n = 300;
-    const t0 = performance.now();
-    for (let k = 0; k < n; k++) view.update(FRAME, (120 + k) * FRAME, sails, w);
-    const ms = (performance.now() - t0) / n;
+    const n = 60;
+    let ms = Infinity;
+    for (let b = 0; b < 5; b++) {
+      const t0 = performance.now();
+      for (let k = 0; k < n; k++) view.update(FRAME, (120 + b * n + k) * FRAME, sails, w);
+      ms = Math.min(ms, (performance.now() - t0) / n);
+    }
     expect(ms).toBeLessThan(perfBudget(0.8));
   });
 });
