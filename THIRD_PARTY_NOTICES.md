@@ -147,3 +147,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
+
+## Acknowledgements (no licence terms attached)
+
+- `src/audio/noise.ts`: the pink-noise filter coefficients are Paul Kellet's "refined" six-pole recipe, from the
+  musicdsp.org archive ("Pink noise filter"). They were published without licence terms, and only the coefficients
+  are used.
+- `src/sim/rng.ts`: the seeded random-number generator is the well-known public-domain mulberry32 algorithm by
+  Tommy Ettinger.

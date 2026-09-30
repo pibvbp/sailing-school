@@ -1,5 +1,9 @@
 # Sailing School — design spec
 
+> **Note:** this is the original design document, written before the build. Numbers and details were refined
+> during implementation and review. Where this document and the code or the pages in [`docs/`](../../) differ, the
+> code and those pages are authoritative.
+
 Date: 2026-09-29 · Status: approved to build (owner chose "plan, then build straight through")
 
 ## 1. Intent

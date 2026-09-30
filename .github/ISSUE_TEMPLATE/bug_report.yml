@@ -1,0 +1,83 @@
+name: Bug report
+description: Something in the app or the docs doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please check the [open issues](https://github.com/pibvbp/sailing-school/issues) first, in case someone has reported it already.
+
+        For a **security** problem, please don't open an issue: follow [SECURITY.md](https://github.com/pibvbp/sailing-school/blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect to see instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Which mode (Lessons, Free sail or Sail lab), and which lesson and step? What were the wind settings, the camera and the overlays, and what did you press?
+      placeholder: |
+        1. Open Free sail and set the wind to 20 kn
+        2. Hoist the spinnaker (H) on a broad reach
+        3. Press G to gybe
+        4. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      options:
+        - Lessons
+        - Free sail
+        - Sail lab
+        - How the boat behaves (physics)
+        - Graphics
+        - Sound
+        - Controls and interface
+        - Performance
+        - Documentation
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      description: You'll find the version in the browser's About page.
+      placeholder: e.g. Chrome 130
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and operating system
+      placeholder: e.g. MacBook Air M1 with macOS, Windows laptop with an NVIDIA GPU, Pixel phone with Android
+  - type: dropdown
+    id: quality
+    attributes:
+      label: Graphics quality
+      description: Shown in the top bar, for example "Auto · high".
+      options:
+        - Auto
+        - Ultra
+        - High
+        - Medium
+        - Low
+        - I don't know
+  - type: textarea
+    id: console
+    attributes:
+      label: Console messages
+      description: Any errors from the browser's developer console (F12 on most browsers, ⌥⌘I on a Mac).
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or a screen recording
+      description: Drag files here. For physics problems, include the instrument strip (speed, wind, heel) in the picture.

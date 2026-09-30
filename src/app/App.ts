@@ -1,7 +1,7 @@
 // The application (plan Task 16): owns the renderer, the scene modules, the simulation and the UI, and
 // implements the AppApi that the HUD, keyboard and lessons drive.
 import * as THREE from 'three';
-import { createRenderer, pixelRatioFor } from '../render/core/renderer';
+import { createRenderer, pixelRatioFor, FloatTargetsUnavailableError } from '../render/core/renderer';
 import { PostChain } from '../render/core/post';
 import { QualityGovernor } from '../render/core/quality';
 import { FrameTimer } from '../render/core/frameTimer';
@@ -129,6 +129,10 @@ export class App implements AppApi {
 
   constructor(canvas: HTMLCanvasElement, uiRoot: HTMLElement, opts: AppOptions = {}) {
     this.renderer = createRenderer(canvas);
+    if (!Ocean.isSupported(this.renderer)) {
+      this.renderer.dispose();
+      throw new FloatTargetsUnavailableError();
+    }
     // The post chain renders several passes per frame; count the whole frame, not just the last pass.
     this.renderer.info.autoReset = false;
     this.frameTimer = new FrameTimer(this.renderer);

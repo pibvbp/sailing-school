@@ -1,6 +1,6 @@
 import { App } from './app/App';
 import { CURRICULUM } from './lessons/curriculum';
-import { WebGL2UnavailableError } from './render/core/renderer';
+import { FloatTargetsUnavailableError, WebGL2UnavailableError } from './render/core/renderer';
 
 declare global {
   interface Window { __ready?: boolean }
@@ -30,6 +30,8 @@ function boot(): void {
   } catch (err) {
     if (err instanceof WebGL2UnavailableError) {
       showFallback('Sailing School needs WebGL 2', 'Your browser or device could not start WebGL 2. Try a recent Chrome, Edge, Firefox or Safari, and make sure hardware acceleration is enabled.');
+    } else if (err instanceof FloatTargetsUnavailableError) {
+      showFallback('This graphics chip can\u2019t draw the sea', 'Sailing School needs a GPU that can render to floating-point targets (for the ocean waves). Try a recent desktop browser with hardware acceleration enabled, or another device.');
     } else {
       console.error(err);
       showFallback('Something went wrong starting the 3-D scene', err instanceof Error ? err.message : String(err));

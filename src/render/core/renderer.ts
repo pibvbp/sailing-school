@@ -3,6 +3,14 @@
 import * as THREE from 'three';
 
 /** Thrown by {@link createRenderer} when the browser cannot give us a WebGL2 context. */
+/** WebGL 2 is there, but the GPU cannot render to floating-point targets (the FFT ocean needs them). */
+export class FloatTargetsUnavailableError extends Error {
+  constructor(message = 'This GPU cannot render to floating-point targets.') {
+    super(message);
+    this.name = 'FloatTargetsUnavailableError';
+  }
+}
+
 export class WebGL2UnavailableError extends Error {
   constructor(message = 'WebGL2 is not available in this browser.') {
     super(message);

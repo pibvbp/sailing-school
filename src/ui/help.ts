@@ -68,6 +68,13 @@ export class HelpDialog {
         ]),
         h('section', 'sx-set', [h('h3', { class: 'sx-set-title', text: 'Colours' }), colours]),
         h('section', 'sx-set', [h('h3', { class: 'sx-set-title', text: 'Glossary' }), filter, list]),
+        h('section', 'sx-set', [
+          h('h3', { class: 'sx-set-title', text: 'Disclaimer' }),
+          h('p', { class: 'sx-help-p', text: 'Sailing School is an educational simulation, not sailing instruction. It is provided as is, with no warranty, and its authors accept no liability or responsibility for its use. Before you sail for real, learn from a recognised sailing school, get the licence your waters require, and use common sense — the sea doesn\u2019t care how well you did in a simulator.' }),
+          h('p', { class: 'sx-help-p' }, [
+            h('a', { text: 'Source code, licence and credits', attrs: { href: 'https://github.com/pibvbp/sailing-school', target: '_blank', rel: 'noopener' } }),
+          ]),
+        ]),
       ]),
     ]));
   }

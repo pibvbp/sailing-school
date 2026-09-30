@@ -1,0 +1,57 @@
+name: Lesson idea
+description: Propose a new lesson, or a better way to teach something in an existing one.
+labels: ["enhancement", "lesson"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping people learn to sail! Lessons run in the live simulation, so the best ideas are things the learner can *do* and the simulation can *measure*. [docs/writing-lessons.md](https://github.com/pibvbp/sailing-school/blob/main/docs/writing-lessons.md) explains how lessons work, and [docs/physics.md](https://github.com/pibvbp/sailing-school/blob/main/docs/physics.md) what the simulation models.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What should the learner understand afterwards?
+      placeholder: e.g. Why easing the traveler depowers the main without adding twist.
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: Where does it fit?
+      options:
+        - First steps
+        - How sails work
+        - Trim and balance
+        - Manoeuvres
+        - Spinnaker
+        - Tactics
+        - A new module
+        - An improvement to an existing lesson
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: The scenario
+      description: The wind speed, the point of sail, which sails are up, gusts or shifts, and the camera and overlays that would show the idea best.
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks the simulation could check
+      description: Things measurable from the boat, such as angles, speeds, heel, helm, telltales or events. A learner who does nothing must not pass them.
+      placeholder: e.g. Upwind in 16 kn with heel under 20° for 10 s, using only the traveler.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Outline of the steps
+      description: Optional. A short title and a sentence or two for each step.
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Sailing books, coaching material or videos that teach it this way.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to write this lesson myself.
