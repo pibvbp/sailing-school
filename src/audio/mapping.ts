@@ -18,13 +18,21 @@ export const finiteOr = (x: number, fallback: number): number => (x - x === 0 ? 
 // ---- wind ------------------------------------------------------------------------------------------------
 
 const windU = (aws: number): number => clamp(aws / AWS_REF, 0, 2);
+/**
+ * The wind's loudness follows AWS² up to ~20 kn (u = 0.85), then its growth is halved, so a gale is louder but does not
+ * lean on the limiter (30 kn ends up ≈ 3 dB under the pure square law, 40 kn ≈ 5 dB).
+ */
+const windLevelU = (aws: number): number => {
+  const u = windU(aws);
+  return u <= 0.85 ? u : 0.85 + (u - 0.85) * 0.5;
+};
 
-/** Low "roar" of the wind: level ∝ AWS² (spec: level grows ~ AWS²). */
-export const windRoarLevel = (aws: number): number => 0.52 * windU(aws) ** 2;
+/** Low "roar" of the wind: level ∝ AWS² (spec: level grows ~ AWS²), flattening above ~20 kn. */
+export const windRoarLevel = (aws: number): number => 0.52 * windLevelU(aws) ** 2;
 /** Roar low-pass cut-off (Hz) — the wind gets brighter as it builds. */
 export const windRoarCutoff = (aws: number): number => 120 + 560 * Math.min(windU(aws), 1.5);
 /** Mid/high "hiss" of the air: steeper than AWS² so light air is mostly the soft low sound. */
-export const windHissLevel = (aws: number): number => 0.31 * windU(aws) ** 2.3;
+export const windHissLevel = (aws: number): number => 0.31 * windLevelU(aws) ** 2.3;
 export const windHissCutoff = (aws: number): number => 380 + 1500 * Math.min(windU(aws), 1.5) ** 0.85;
 /** Rigging whistle 0…1: absent below ~13 kn, fully in by ~22 kn apparent ("a subtle whistle band above ~15 kn"). */
 export const whistleDrive = (aws: number): number => smoothstep(13 * KN, 22 * KN, aws);
@@ -102,8 +110,38 @@ export const panFor = (bearing: number, width: number): number => clamp(Math.sin
 /**
  * Compass yaw (rad, clockwise from north — the convention of `boat.heading`) of a camera whose forward vector in
  * three.js world coordinates is (x, ·, z): X = east, Z = −north, so bearing = atan2(east, north) = atan2(x, −z).
+ * Degenerate when the camera looks straight down (x and z are then rounding noise): use `cameraYawFromBasis`.
  */
 export const cameraYawFromForward = (x: number, z: number): number => Math.atan2(x, -z);
+
+/** Anything with x, y, z: a three.js Vector3, or a plain object. */
+export interface Vec3Like { x: number; y: number; z: number }
+
+/**
+ * Compass yaw (rad, clockwise from north) the listener faces, from a camera's world-space axes — three.js: X = east,
+ * Y = up, Z = −north — `forward` = where it looks (its −Z axis), `up` = the top of the screen (its +Y axis). Both are
+ * read from the camera matrix, e.g. `camera.getWorldDirection(forward)` and `up.setFromMatrixColumn(camera.matrixWorld, 1)`.
+ *
+ * For a level or tilted view the answer is the horizontal part of `forward`. Looking straight down (the top view)
+ * that part is rounding noise, and "ahead" is the top of the screen: the horizontal part of `up`. Looking down, `up`
+ * leans the same way as `forward` for a camera without roll, so the two horizontal parts simply add, `up`'s weight
+ * fading in as the view steepens (from about 37° below the horizon, full at about 72°): the yaw never flips and is exact
+ * at the top view, where `up` is the wind-up bearing the rig sets.
+ */
+export function cameraYawFromBasis(forward: Vec3Like, up: Vec3Like): number {
+  const fl = Math.hypot(forward.x, forward.y, forward.z);
+  const ul = Math.hypot(up.x, up.y, up.z);
+  if (!(fl > 1e-9)) return 0;
+  const fx = forward.x / fl, fy = forward.y / fl, fz = forward.z / fl;
+  // 0 when level or looking up … 1 when (nearly) straight down.
+  const down = smoothstep(0.6, 0.95, -fy);
+  const k = ul > 1e-9 ? down / ul : 0;
+  const x = fx + up.x * k;
+  const z = fz + up.z * k;
+  if (Math.hypot(x, z) > 1e-6) return Math.atan2(x, -z);
+  // Looking straight up (nothing horizontal in `forward`): the top of the screen is all there is.
+  return ul > 1e-9 && Math.hypot(up.x, up.z) > 1e-9 ? Math.atan2(up.x, -up.z) : 0;
+}
 
 /** Mean of `luffing` over a sail's sections (0 for none); a loop, so no per-frame allocation. */
 export function meanLuffing(sections: ReadonlyArray<{ luffing: number }>): number {

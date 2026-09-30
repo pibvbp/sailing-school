@@ -1,11 +1,13 @@
 // Soundscape tests, in two parts.
 //
-// 1. Node: the real Soundscape driven against a strict fake AudioContext (Node has no WebAudio) — graph wiring,
-//    robustness to garbage snapshots, event handling, pause/mute logic, allocation and cost per update().
-// 2. Chromium: the real Soundscape rendered offline through a real OfflineAudioContext (harness.html, headless
-//    Chromium via playwright-core, skipped with a note when no browser is installed) — the signal-level
-//    requirements: silence before start / when muted, level rising with AWS, flogging energy only while luffing,
-//    no clipping, no clicks when parameters jump, stereo placement, event sounds, update() cost.
+// 1. Node (always run): the real Soundscape driven against a strict fake AudioContext (Node has no WebAudio) — graph
+//    wiring, robustness to garbage snapshots, event handling, pause/mute logic, allocation and cost per update().
+//    Its companions: lifecycle.test.ts (start/suspend/resume/visibility/dispose), graph.test.ts (topology, output
+//    ceiling, click-free parameter moves), nodes.test.ts, flog.test.ts, mapping.test.ts, noise.test.ts.
+// 2. Chromium (opt-in, `pnpm test:audio`): the real Soundscape rendered offline through a real OfflineAudioContext
+//    (harness.html, headless Chromium via playwright-core) — the signal-level requirements: silence before start / when
+//    muted, level rising with AWS, flogging energy only while luffing, no clipping, no clicks when parameters jump,
+//    stereo placement, event sounds, update() cost. It loads the machine, so the everyday suite leaves it out.
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { runInNewContext } from 'node:vm';
 import { setFlagsFromString } from 'node:v8';
@@ -13,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { setPriority } from 'node:os';
 import { Soundscape } from '../Soundscape';
 import { DEG, KN } from '../../shared/math';
-import { FakeContext } from './fakeContext';
+import { perfBudget } from '../../testing/perf';
+import { FakeContext, outputChain } from './fakeContext';
 import { event, snapshotFrom, type Frame } from './fixtures';
 import type { Scenario } from './scenario';
 import type { RenderResult } from './harness';
@@ -96,11 +99,12 @@ describe('Soundscape (fake context)', () => {
     expect(master.lastTarget).toBeCloseTo(0.25, 9);
   });
 
-  it('constructed muted stays silent, and an injected offline-like context is never suspended or resumed', async () => {
+  it('constructed muted: the master gain is never raised above 0', async () => {
     const { ctx } = await started({ enabled: false });
-    const master = ctx.params().find((p) => p.name === 'gain' && p.targets === 1 && p.lastTarget === 0);
-    expect(master).toBeDefined();
-    expect(master!.value).toBe(0);
+    const master = outputChain(ctx).master.gain;
+    expect(master.lastTarget).toBe(0);
+    expect(master.max).toBe(0);
+    expect(master.value).toBe(0);
   });
 
   it('survives garbage snapshots without throwing or passing a non-finite value to the audio graph', async () => {
@@ -359,7 +363,7 @@ describe('Soundscape (fake context)', () => {
     const t0 = performance.now();
     run(20000);
     const perUpdate = (performance.now() - t0) / 20000;
-    expect(perUpdate).toBeLessThan(0.05); // ms; the fake is cheaper than a browser, the real cost is asserted in Chromium below
+    expect(perUpdate).toBeLessThan(perfBudget(0.05)); // ms; the fake is cheaper than a browser, the real cost is asserted in Chromium (pnpm test:audio)
   });
 });
 

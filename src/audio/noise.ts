@@ -3,24 +3,21 @@
 // All noise is generated once at start-up into looping AudioBuffers. The colouring filters are run over the
 // buffer once before the pass that is kept, so their state at the end equals their state at the start: the
 // loop seam is then as smooth as any other pair of samples (a plainly filtered loop would tick once per loop).
+import { mulberry32 } from '../sim/rng';
 
-/** mulberry32: tiny, fast and well distributed. The soundscape's only source of randomness (seedable for tests). */
+/** The soundscape's only source of randomness (seedable for tests): the simulation's mulberry32 plus normal variates. */
 export class Rng {
-  private state: number;
+  private readonly uniform: () => number;
   private spare = 0;
   private hasSpare = false;
 
   constructor(seed = 0x5eed) {
-    this.state = seed >>> 0;
+    this.uniform = mulberry32(seed);
   }
 
   /** Uniform in [0, 1). */
   next(): number {
-    this.state = (this.state + 0x6d2b79f5) >>> 0;
-    let t = this.state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    return this.uniform();
   }
 
   range(lo: number, hi: number): number {
@@ -63,7 +60,11 @@ function normaliseRms(x: Float64Array, out: Float32Array): void {
   for (let i = 0; i < x.length; i++) out[i] = x[i]! * k;
 }
 
-/** One pass of Paul Kellet's refined pink filter (−3 dB/oct, ±0.05 dB from ~9 Hz up) over `w`, warm state kept. */
+/**
+ * One pass of Paul Kellet's "refined" pink-noise filter (−3 dB/oct, ±0.05 dB from ~9 Hz up at 44.1 kHz) over `w`, warm
+ * state kept. Provenance: six-pole recipe by Paul Kellet, published on the musicdsp.org archive ("Pink noise filter")
+ * without a licence; only its coefficients are used, the code around them is ours (see THIRD_PARTY_NOTICES.md).
+ */
 function pinkPass(w: Float64Array, out: Float64Array, s: Float64Array): void {
   let b0 = s[0]!, b1 = s[1]!, b2 = s[2]!, b3 = s[3]!, b4 = s[4]!, b5 = s[5]!, b6 = s[6]!;
   for (let i = 0; i < w.length; i++) {

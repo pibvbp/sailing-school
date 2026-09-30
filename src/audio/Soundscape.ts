@@ -6,10 +6,20 @@
 //   ...every frame:  sound.update(snapshot, cameraYaw, dt)
 //
 // `cameraYaw` is the compass bearing (rad, clockwise from north — the convention of `boat.heading`) the camera looks
-// along; `cameraYawFromForward(x, z)` converts a three.js forward vector. `snapshot.t` must advance while the
-// simulation runs: a snapshot whose `t` stands still for a third of a second is treated as "paused" and the sound
-// ducks away. Everything that changes continuously glides (exponentially) so nothing clicks; the master chain ends in
-// a soft limiter, so the output never exceeds ~0.95.
+// along; `cameraYawFromBasis(forward, up)` makes it from the camera's world axes (it also copes with the top view).
+// `snapshot.t` must advance while the simulation runs: a snapshot whose `t` stands still for a third of a second is
+// treated as "paused" and the sound ducks away. Everything that changes continuously glides (exponentially) so nothing
+// clicks; the master chain ends in a soft limiter, so the output never exceeds 0.95.
+//
+// Run state: sound is audible only while it is unmuted, the tab is visible, the simulation is running and `update` is
+// being called. Each way of becoming inaudible first fades (master or duck gain) and only then — a third of a second to
+// a second and a half later — suspends the real-time context, which costs no audio-thread CPU while asleep; becoming
+// audible again resumes it at once. Only a suspension we made ourselves is ever undone; one the browser made (a phone
+// call, a locked screen) is retried and the gesture listeners re-armed.
+//
+// Deliberate deviations from spec §10: the snapshot carries no pitch, so the water's "splash modulation" is the bow-wave
+// swoosh driven by roll rate and heel; and the hull rush rises as speed^2.2, not linearly (a hull at 2 kn is nearly
+// silent, at hull speed it hisses).
 import type { SimEvent, SimSnapshot } from '../sim/types';
 import { GLIDE, clamp01, collapseLevel, crashLevel, finiteOr, meanLuffing, refillLevel, spinRustleDrive, waterRushLevel, windRoarLevel } from './mapping';
 import { Glide, NoiseBank, gainNode } from './nodes';
@@ -78,8 +88,15 @@ const EVENT_DELAY = 0.006;
 const STALE_MS = 700;
 /** A frozen snapshot clock for this long (s) means the simulation is paused. */
 const PAUSED_AFTER = 0.3;
-/** The master fade has settled after this long (s). */
+/** The master fade has settled after this long (s of audio time): the layer work can stop. */
 const MASTER_SETTLED = 1.3;
+/**
+ * Wall-clock delays (ms) between the sound becoming inaudible and the context being suspended: long enough for the fade
+ * that silences it (master: time constant 0.12 s; duck: 0.15 s), and for a pause to end without a hiccup.
+ */
+const MUTE_SUSPEND_MS = 1300;
+const HIDDEN_SUSPEND_MS = 300;
+const DUCK_SUSPEND_MS = 1600;
 
 const EV_CRASH = 0;
 const EV_REFILL = 1;
@@ -110,14 +127,32 @@ export class Soundscape {
   private readonly lastEvent = new Float64Array(3).fill(-Infinity);
   private lastUpdateMs = 0;
   private watchdog: ReturnType<typeof setInterval> | null = null;
-  private suspendTimer: ReturnType<typeof setTimeout> | null = null;
   private gestureCleanup: (() => void) | null = null;
+  private gestureTarget: EventTarget | null = null;
+
+  // Why the sound is or is not audible, and whether we have put the context to sleep.
+  private hidden = false;
+  private paused = false;
+  private stale = false;
+  private suspendTimer: ReturnType<typeof setTimeout> | null = null;
+  private suspendDue = Infinity;
+  private suspendedByUs = false;
 
   private readonly onVisibility = (): void => {
+    if (this.disposed) return;
+    this.hidden = typeof document !== 'undefined' && document.hidden === true;
+    // Fade first; the context is put to sleep a moment later, and woken (with the duck still down) when visible again.
+    if (this.hidden && this.graph && this.ctx) this.graph.duck.to(0, this.ctx.currentTime);
+    this.syncRun();
+  };
+
+  /** The browser (not us) stopped the context — a phone call, a locked screen. Ask again, and again on the next gesture. */
+  private readonly onStateChange = (): void => {
     const ctx = this.ctx as AudioContext | null;
-    if (!ctx || this.disposed) return;
-    if (document.hidden) void ctx.suspend().catch(() => undefined);
-    else if (this.enabled) void ctx.resume().catch(() => undefined);
+    if (!ctx || this.disposed || this.suspendedByUs || !this.audible) return;
+    if (ctx.state === 'running' || ctx.state === 'closed') return;
+    void ctx.resume().catch(() => undefined);
+    if (this.gestureTarget) this.startOnFirstGesture(this.gestureTarget);
   };
 
   constructor(options: SoundscapeOptions = {}) {
@@ -130,6 +165,11 @@ export class Soundscape {
   /** True once the audio graph exists and the context is running (i.e. sound can actually come out). */
   get running(): boolean {
     return this.graph !== null && this.ctx !== null && (this.offline || this.ctx.state === 'running');
+  }
+
+  /** True while sound is meant to be heard: unmuted, tab visible, simulation running and `update` being called. */
+  get audible(): boolean {
+    return this.enabled && !this.hidden && !this.paused && !this.stale;
   }
 
   /** The underlying context (null until start()). */
@@ -147,7 +187,8 @@ export class Soundscape {
     // so it happens before the first await. Generating the noise takes a moment and yields between buffers.
     const ctx = this.ensureContext();
     if (!ctx) return;
-    const resumed = this.offline || ctx.state === 'running' ? null : (ctx as AudioContext).resume().catch(() => undefined);
+    // (A context we put to sleep ourselves — muted — stays asleep: waking it is setEnabled(true)'s business.)
+    const resumed = this.offline || ctx.state === 'running' || this.suspendedByUs ? null : (ctx as AudioContext).resume().catch(() => undefined);
     if (!this.graph) await (this.building ??= this.build());
     await resumed;
   }
@@ -155,6 +196,7 @@ export class Soundscape {
   /** Arm one-shot listeners that call start() on the first click, key press or touch (spec: "starts on first interaction"). */
   startOnFirstGesture(target: EventTarget = window): void {
     if (this.gestureCleanup || this.disposed) return;
+    this.gestureTarget = target;
     const events = ['pointerdown', 'pointerup', 'keydown', 'touchend'];
     const handler = (): void => {
       void this.start().then(() => {
@@ -169,16 +211,11 @@ export class Soundscape {
     this.gestureCleanup = cleanup;
   }
 
-  /** Mute / unmute with a short fade. While muted the audio context is suspended after the fade to save CPU. */
+  /** Mute / unmute with a short fade. A muted real-time context is put to sleep once the fade is over. */
   setEnabled(on: boolean): void {
     this.enabled = on;
     this.applyMaster();
-    const ctx = this.ctx as AudioContext | null;
-    if (!ctx || !this.graph || this.offline || this.disposed) return;
-    if (this.suspendTimer !== null) clearTimeout(this.suspendTimer);
-    this.suspendTimer = null;
-    if (on) void ctx.resume().catch(() => undefined);
-    else this.suspendTimer = setTimeout(() => { if (!this.enabled) void ctx.suspend().catch(() => undefined); }, 1000 * MASTER_SETTLED);
+    this.syncRun();
   }
 
   /** Master volume 0…1 (perceptual: gain = v²). */
@@ -207,7 +244,8 @@ export class Soundscape {
   }
 
   /**
-   * Feed one simulation frame. Cost ≈ a few dozen AudioParam calls, no allocation.
+   * Feed one simulation frame. Cost ≈ a few dozen AudioParam calls, no allocation. Never throws: if the browser
+   * refuses something, the sound is shut down (one warning) rather than taking the frame loop with it.
    * @param s          the latest snapshot
    * @param cameraYaw  compass bearing (rad) the camera looks along
    * @param dt         seconds since the previous call
@@ -216,6 +254,14 @@ export class Soundscape {
     const g = this.graph;
     const ctx = this.ctx;
     if (!g || !ctx || this.disposed) return;
+    try {
+      this.advance(g, ctx, s, cameraYaw, dt);
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
+  private advance(g: Graph, ctx: BaseAudioContext, s: SimSnapshot, cameraYaw: number, dt: number): void {
     const now = ctx.currentTime;
     this.lastUpdateMs = performance.now();
     dt = Math.min(2, Math.max(0, finiteOr(dt, 1 / 60)));
@@ -231,7 +277,12 @@ export class Soundscape {
     this.prevT = t;
     const paused = this.stillFor > PAUSED_AFTER;
     this.drives.ducked = paused;
-    g.duck.to(paused ? 0 : 1, now);
+    if (paused !== this.paused || this.stale) {
+      this.paused = paused;
+      this.stale = false; // we are being called again
+      this.syncRun();
+    }
+    g.duck.to(paused || this.hidden ? 0 : 1, now);
 
     const w = s.wind;
     const b = s.boat;
@@ -241,7 +292,9 @@ export class Soundscape {
     const events = s.events;
     for (let i = 0; i < events.length; i++) this.onEvent(events[i]!, now, aws, paused);
 
-    if (paused || (this.mutedAt !== null && now - this.mutedAt > MASTER_SETTLED)) return; // silent anyway: skip the work
+    // Silent anyway (paused; asleep; muted and the fade is over): skip the work. The muted test uses the audio clock,
+    // which stops once the context is asleep — `suspendedByUs` covers that case.
+    if (paused || this.suspendedByUs || (this.mutedAt !== null && now - this.mutedAt > MASTER_SETTLED)) return;
 
     const awa = finiteOr(w.awa, 0);
     const heading = finiteOr(b.heading, 0);
@@ -272,20 +325,7 @@ export class Soundscape {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.gestureCleanup?.();
-    if (this.watchdog !== null) clearInterval(this.watchdog);
-    if (this.suspendTimer !== null) clearTimeout(this.suspendTimer);
-    this.watchdog = this.suspendTimer = null;
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibility);
-    const g = this.graph;
-    this.graph = null;
-    if (g) {
-      g.master.gain.cancelScheduledValues(0);
-      g.master.gain.value = 0;
-      g.master.disconnect();
-    }
-    if (this.ctx && this.ownsContext) void (this.ctx as AudioContext).close().catch(() => undefined);
-    this.ctx = null;
+    this.teardown();
   }
 
   // ------------------------------------------------------------------------------------------------ internals
@@ -331,9 +371,95 @@ export class Soundscape {
     return this.ctx;
   }
 
+  /** Something the browser would not do: warn once and go silent for good (closing a context we made ourselves). */
   private fail(err: unknown): void {
+    if (this.unsupported) return;
     this.unsupported = true;
     console.warn('[soundscape] audio disabled:', err);
+    this.teardown();
+  }
+
+  /** Stop everything and let go: timers, listeners, the graph, and a context that is ours. Safe to call twice. */
+  private teardown(): void {
+    this.gestureCleanup?.();
+    if (this.watchdog !== null) clearInterval(this.watchdog);
+    this.watchdog = null;
+    this.clearSuspendTimer();
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibility);
+    const ctx = this.ctx;
+    if (ctx && !this.offline) ctx.onstatechange = null;
+    const g = this.graph;
+    this.graph = null;
+    if (g) {
+      g.master.gain.cancelScheduledValues(0);
+      g.master.gain.value = 0;
+      g.master.disconnect();
+    }
+    if (ctx && this.ownsContext) void (ctx as AudioContext).close().catch(() => undefined);
+    this.ctx = null;
+  }
+
+  private clearSuspendTimer(): void {
+    if (this.suspendTimer !== null) clearTimeout(this.suspendTimer);
+    this.suspendTimer = null;
+    this.suspendDue = Infinity;
+  }
+
+  /**
+   * Bring a real-time context's run state in line with `audible`: wake it at once when sound is wanted, put it to sleep
+   * once the fade that silenced the sound has finished (`immediate`: nothing was ever audible, so now). Call it whenever
+   * something that decides audibility changes; it is idempotent.
+   */
+  private syncRun(immediate = false): void {
+    if (!this.ctx || !this.graph || this.offline || this.disposed) return;
+    if (this.audible) {
+      this.clearSuspendTimer();
+      this.resumeNow();
+      return;
+    }
+    if (this.suspendedByUs) return;
+    if (immediate) {
+      this.suspendNow();
+      return;
+    }
+    const delay = Math.min(
+      this.enabled ? Infinity : MUTE_SUSPEND_MS,
+      this.hidden ? HIDDEN_SUSPEND_MS : Infinity,
+      this.paused || this.stale ? DUCK_SUSPEND_MS : Infinity,
+    );
+    const due = performance.now() + delay;
+    if (due >= this.suspendDue) return; // a sleep is already due sooner (a second reason for silence must not postpone it)
+    this.clearSuspendTimer();
+    this.suspendDue = due;
+    this.suspendTimer = setTimeout(() => {
+      this.suspendTimer = null;
+      this.suspendDue = Infinity;
+      if (!this.audible) this.suspendNow();
+    }, delay);
+  }
+
+  private suspendNow(): void {
+    const ctx = this.ctx as AudioContext | null;
+    if (!ctx || this.suspendedByUs) return;
+    this.suspendedByUs = true;
+    void ctx.suspend().catch(() => undefined);
+  }
+
+  private resumeNow(): void {
+    const ctx = this.ctx as AudioContext | null;
+    if (!ctx || !this.suspendedByUs) return;
+    this.suspendedByUs = false;
+    void ctx.resume().catch(() => undefined);
+  }
+
+  /** The watchdog: `update` has gone quiet (a stalled loop, a hidden tab) — fade out, and sleep if it stays that way. */
+  private checkStale(): void {
+    const g = this.graph;
+    const ctx = this.ctx;
+    if (!g || !ctx || this.stale || performance.now() - this.lastUpdateMs <= STALE_MS) return;
+    this.stale = true;
+    g.duck.to(0, ctx.currentTime);
+    this.syncRun();
   }
 
   private async build(): Promise<boolean> {
@@ -371,11 +497,12 @@ export class Soundscape {
       this.applyMaster();
       this.lastUpdateMs = performance.now();
       if (!this.offline) {
-        this.watchdog = setInterval(() => {
-          const g = this.graph;
-          if (g && this.ctx && performance.now() - this.lastUpdateMs > STALE_MS) g.duck.to(0, this.ctx.currentTime);
-        }, 250);
+        this.hidden = typeof document !== 'undefined' && document.hidden === true; // (an offline render does not care about the tab)
+        this.watchdog = setInterval(() => this.checkStale(), 250);
         if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibility);
+        ctx.onstatechange = this.onStateChange;
+        // Muted (or hidden) before the graph even existed: nothing has been audible, so sleep at once.
+        this.syncRun(true);
       }
       return true;
     } catch (err) {

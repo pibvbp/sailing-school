@@ -28,7 +28,7 @@ import { FixedStepLoop } from './loop';
 import { LabPanel, LAB_DEFAULTS, twaForAwa, type LabParams } from './labPanel';
 import { TelltaleCam } from './telltaleCam';
 import { Soundscape } from '../audio/Soundscape';
-import { cameraYawFromForward } from '../audio/mapping';
+import { cameraYawFromBasis } from '../audio/mapping';
 import { DEG, KN, wrapPi } from '../shared/math';
 import { BOAT } from '../shared/boatSpec';
 
@@ -99,6 +99,7 @@ export class App implements AppApi {
   private readonly ov: Overlays;
   private readonly soundscape = new Soundscape();
   private readonly camDir = new THREE.Vector3();
+  private readonly camUp = new THREE.Vector3();
   /** Jib luff telltales at 25 and 50 % height (port/stbd): the pairs a helmsman watches. */
   private readonly jibTelltales: THREE.Object3D[];
   private readonly loop: FixedStepLoop;
@@ -445,8 +446,10 @@ export class App implements AppApi {
     });
 
     this.ov.update(dt, snap, this.camera);
+    // Listening direction: the view's heading, or the top of the screen when looking straight down.
     this.camera.getWorldDirection(this.camDir);
-    this.soundscape.update(snap, cameraYawFromForward(this.camDir.x, this.camDir.z), dt);
+    this.camUp.setFromMatrixColumn(this.camera.matrixWorld, 1);
+    this.soundscape.update(snap, cameraYawFromBasis(this.camDir, this.camUp), dt);
     this.hud.update(snap, dt);
     if (this.mode === 'lab') this.lab?.update(snap, dt);
     this.runner.update(snap, dt * scale);
