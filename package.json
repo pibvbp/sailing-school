@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:audio": "AUDIO_BROWSER_TESTS=1 vitest run src/audio",
     "snap": "node scripts/snap.mjs",
     "polars": "vite-node scripts/polars.ts",
     "e2e": "playwright test"

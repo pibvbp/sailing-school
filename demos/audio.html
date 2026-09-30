@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/styles/base.css" />
+    <title>Audio demo — Sailing School</title>
+    <style>
+      html { height: auto; min-height: 100%; overflow: auto; background: #07131f; }
+      body { height: auto; min-height: 100vh; overflow: auto; background: radial-gradient(1200px 700px at 20% -10%, #17466b 0%, #0b1f33 55%, #07131f 100%) fixed; }
+      main { max-width: 1180px; margin: 0 auto; padding: 22px 20px 40px; }
+      header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+      h1 { font-size: 21px; margin: 0; letter-spacing: 0.01em; }
+      .sub { color: var(--ink-dim); font-size: 13px; margin: 2px 0 0; }
+      .grow { flex: 1; }
+      .grid { display: grid; grid-template-columns: minmax(340px, 470px) 1fr; gap: 18px; align-items: start; }
+      @media (max-width: 880px) { .grid { grid-template-columns: 1fr; } }
+      .panel { background: linear-gradient(180deg, rgba(15,33,55,.66), rgba(6,16,30,.72)); border: 1px solid var(--panel-edge); border-radius: 14px;
+        box-shadow: 0 14px 36px rgba(0,7,18,.34), inset 0 1px 0 rgba(255,255,255,.07); padding: 16px 18px; }
+      .panel h2 { font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-dim); margin: 0 0 12px; font-weight: 600; }
+      .panel + .panel { margin-top: 14px; }
+      button { font: inherit; color: var(--ink); background: rgba(255,255,255,.08); border: 1px solid var(--panel-edge); border-radius: 9px; padding: 8px 13px; cursor: pointer; }
+      button:hover { background: rgba(255,255,255,.14); }
+      button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      button.primary { background: var(--accent); border-color: transparent; color: #1b0d00; font-weight: 700; padding: 11px 22px; font-size: 15px; }
+      button.primary:hover { filter: brightness(1.08); }
+      button.on { background: rgba(48,164,108,.28); border-color: rgba(48,164,108,.6); }
+      button.impact { background: rgba(229,72,77,.2); border-color: rgba(229,72,77,.5); }
+      .chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,.08); border: 1px solid var(--panel-edge); color: var(--ink-dim); }
+      .chip.live { background: rgba(48,164,108,.22); border-color: rgba(48,164,108,.55); color: #b8f2d2; }
+      .row { display: grid; grid-template-columns: 138px 1fr 74px; align-items: center; gap: 10px; margin: 9px 0; font-size: 13px; }
+      .row label { color: var(--ink-dim); }
+      .row output { font-variant-numeric: tabular-nums; text-align: right; }
+      input[type=range] { width: 100%; accent-color: var(--accent); }
+      .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+      .check { display: flex; gap: 8px; align-items: center; margin: 9px 0; font-size: 13px; color: var(--ink-dim); }
+      canvas { width: 100%; display: block; border-radius: 10px; background: rgba(2,10,20,.6); border: 1px solid var(--panel-edge); }
+      .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; margin-top: 12px; font-size: 12.5px; }
+      .meters div { display: flex; justify-content: space-between; color: var(--ink-dim); border-bottom: 1px solid rgba(255,255,255,.06); padding: 3px 0; }
+      .meters b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+      .pan { position: relative; height: 26px; margin-top: 12px; border-radius: 8px; background: rgba(2,10,20,.6); border: 1px solid var(--panel-edge); }
+      .pan i { position: absolute; top: 50%; left: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--accent); transition: left .15s; }
+      .pan span { position: absolute; top: 5px; font-size: 11px; color: var(--ink-dim); } .pan span:first-child { left: 8px; } .pan span:last-child { right: 8px; }
+      .note { color: var(--ink-dim); font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; }
+      .presets button { padding: 6px 10px; font-size: 12.5px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Soundscape</h1>
+          <p class="sub">Procedural WebAudio — wind, water, flogging sails, spinnaker, boom crash. Driven by a fake snapshot built from the controls.</p>
+        </div>
+        <span class="grow"></span>
+        <span class="chip" id="status">silent — press Start sound</span>
+        <button class="primary" id="start" type="button">Start sound</button>
+        <button id="mute" type="button" hidden>Mute</button>
+      </header>
+
+      <div class="grid">
+        <div>
+          <section class="panel">
+            <h2>Wind and boat</h2>
+            <div class="row"><label for="aws">Apparent wind</label><input id="aws" type="range" min="0" max="36" step="0.5" value="12" /><output data-for="aws"></output></div>
+            <div class="row"><label for="awa">Apparent wind angle</label><input id="awa" type="range" min="-180" max="180" step="1" value="40" /><output data-for="awa"></output></div>
+            <div class="row"><label for="speed">Boat speed</label><input id="speed" type="range" min="0" max="10" step="0.1" value="5" /><output data-for="speed"></output></div>
+            <div class="row"><label for="heel">Heel</label><input id="heel" type="range" min="-35" max="35" step="1" value="14" /><output data-for="heel"></output></div>
+            <div class="row"><label for="roll">Roll rate</label><input id="roll" type="range" min="0" max="0.4" step="0.01" value="0" /><output data-for="roll"></output></div>
+            <div class="row"><label for="yaw">Camera direction</label><input id="yaw" type="range" min="-180" max="180" step="1" value="0" /><output data-for="yaw"></output></div>
+            <label class="check"><input id="gusts" type="checkbox" /> Gusts (slow ±30 % wander of the wind)</label>
+          </section>
+
+          <section class="panel">
+            <h2>Sails</h2>
+            <div class="row"><label for="mainLuff">Main luffing</label><input id="mainLuff" type="range" min="0" max="1" step="0.01" value="0" /><output data-for="mainLuff"></output></div>
+            <div class="row"><label for="jibLuff">Jib luffing</label><input id="jibLuff" type="range" min="0" max="1" step="0.01" value="0" /><output data-for="jibLuff"></output></div>
+            <div class="row"><label for="trim">Sheet trim</label><input id="trim" type="range" min="-0.6" max="0.6" step="0.01" value="0" /><output data-for="trim"></output></div>
+            <label class="check"><input id="spinSet" type="checkbox" /> Spinnaker flying</label>
+            <div class="row"><label for="spinCollapsed">Spinnaker collapse</label><input id="spinCollapsed" type="range" min="0" max="1" step="0.01" value="0" /><output data-for="spinCollapsed"></output></div>
+            <div class="buttons">
+              <button id="crash" class="impact" type="button">Crash gybe</button>
+              <button id="refill" type="button">Spinnaker refill</button>
+              <button id="collapse" type="button">Spinnaker collapse</button>
+            </div>
+            <div class="row"><label for="crashRate">Crash impact rate</label><input id="crashRate" type="range" min="1.5" max="8" step="0.1" value="3.5" /><output data-for="crashRate"></output></div>
+            <p class="note">The collapse slider raises the same events the simulation does when it crosses 0.5. Luffing above ~0.3 starts the flogging.</p>
+          </section>
+        </div>
+
+        <div>
+          <section class="panel">
+            <h2>Output</h2>
+            <canvas id="scope" width="1000" height="150"></canvas>
+            <div style="height:10px"></div>
+            <canvas id="spectrum" width="1000" height="230"></canvas>
+            <div class="pan" title="Where the wind sits in the stereo field"><span>L</span><i id="pan"></i><span>R</span></div>
+            <div class="meters" id="meters"></div>
+          </section>
+          <section class="panel">
+            <h2>Presets</h2>
+            <div class="buttons presets" id="presets"></div>
+            <div class="row" style="margin-top:14px"><label for="volume">Volume</label><input id="volume" type="range" min="0" max="1" step="0.01" value="0.8" /><output data-for="volume"></output></div>
+          </section>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="./audio.ts"></script>
+  </body>
+</html>
