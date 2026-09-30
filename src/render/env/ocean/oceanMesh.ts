@@ -81,6 +81,20 @@ export class OceanMesh {
 
   get triangles(): number { return this.nx * this.ny * 2; }
 
+  /**
+   * Angular size (rad) of one grid row and one column as last fitted for `camera` — with the camera
+   * height and distance this gives the footprint the vertex shader picks its level of detail from.
+   */
+  angularSpacing(camera: THREE.Camera, out: { row: number; col: number }): { row: number; col: number } {
+    const cam = camera as THREE.PerspectiveCamera;
+    const tanHalf = cam.isPerspectiveCamera ? Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) : 0.5;
+    const aspect = cam.isPerspectiveCamera ? cam.aspect : 1;
+    const ndc = this.material.uniforms['uGridNdc']!.value as THREE.Vector4;
+    out.row = ((ndc.w - ndc.z) / this.ny) * tanHalf;
+    out.col = ((ndc.y - ndc.x) / this.nx) * tanHalf * aspect;
+    return out;
+  }
+
   setDetail(detail: number): void {
     const { x, y } = gridResolution(detail);
     if (x === this.nx && y === this.ny) return;
@@ -105,7 +119,7 @@ export class OceanMesh {
     const top = Math.max(horizonNdcY(inv, -GRID_MARGIN, dip), horizonNdcY(inv, GRID_MARGIN, dip));
     const yTop = THREE.MathUtils.clamp(top + 0.03, -GRID_MARGIN + 0.01, GRID_MARGIN);
     (u['uGridNdc']!.value as THREE.Vector4).set(-GRID_MARGIN, GRID_MARGIN, -GRID_MARGIN, yTop);
-    this.material.uniformsNeedUpdate = true;
+    this.mesh.material.uniformsNeedUpdate = true;
   }
 
   dispose(): void { this.mesh.geometry.dispose(); }

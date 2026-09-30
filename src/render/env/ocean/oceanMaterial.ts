@@ -16,7 +16,10 @@ const ENV_WIDTH = 512;
 const ENV_HEIGHT = 128;
 
 export class OceanSurfaceMaterial {
+  /** Opaque water (no blending: cheapest for the biggest draw). */
   readonly material: THREE.ShaderMaterial;
+  /** The same shader and uniforms, alpha-blended, while the x-ray window is open. */
+  readonly xrayMaterial: THREE.ShaderMaterial;
   /** Deep-water backdrop seen through the x-ray window where no hull is behind the surface. */
   readonly backdropMaterial: THREE.ShaderMaterial;
   private readonly u: Record<string, THREE.IUniform>;
@@ -55,8 +58,12 @@ export class OceanSurfaceMaterial {
       uFogDensity: { value: 0 },
       uHazeMax: { value: 0.75 },
       uStreaks: { value: 0 },
-      // water
-      uTime: { value: 0 },
+      // water; texture offsets relative to uRef (see setTime)
+      uRef: { value: new THREE.Vector2() },
+      uOffRipple: { value: new THREE.Vector4() },
+      uOffFoamA: { value: new THREE.Vector4() },
+      uOffFoamB: { value: new THREE.Vector4() },
+      uOffFoamC: { value: new THREE.Vector4() },
       // Irradiance reflectance of clear sea water (π·Rrs): ≈ 4 % in the blue, a third of that in the
       // green, almost nothing in the red — clear water is blue because red is absorbed within metres.
       uWaterScatter: { value: new THREE.Vector3(0.0022, 0.0135, 0.041) },
@@ -98,6 +105,8 @@ export class OceanSurfaceMaterial {
     this.skyLightPass = new FullScreenPass(SKYLIGHT_BAKE, {
       uEnvMap: this.u['uEnvMap']!, uFallbackHorizon: this.u['uFallbackHorizon']!, uFallbackZenith: this.u['uFallbackZenith']!,
     }, 'oceanSkyLight');
+    // Two materials, one program: neither uses NormalBlending, so three's program key (its "opaque"
+    // flag) is identical and switching to x-ray never recompiles.
     this.material = new THREE.ShaderMaterial({
       name: 'OceanSurface',
       vertexShader: SURFACE_VERT,
@@ -107,8 +116,17 @@ export class OceanSurfaceMaterial {
       transparent: false,
       depthWrite: true,
       depthTest: true,
-      // Alpha 1 everywhere except the x-ray window. Custom (not Normal) blending keeps the program key
-      // identical whether the material is opaque or transparent, so toggling x-ray never recompiles.
+      blending: THREE.NoBlending,
+    });
+    this.xrayMaterial = new THREE.ShaderMaterial({
+      name: 'OceanSurfaceXray',
+      vertexShader: SURFACE_VERT,
+      fragmentShader: SURFACE_FRAG,
+      uniforms: this.u,
+      side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: true,
+      depthTest: true,
       blending: THREE.CustomBlending,
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.SrcAlphaFactor,
@@ -127,7 +145,28 @@ export class OceanSurfaceMaterial {
 
   get uniforms(): Record<string, THREE.IUniform> { return this.u; }
 
-  setTime(t: number): void { this.u['uTime']!.value = t; }
+  /**
+   * Time and a reference point near the camera for the texture lookups. Everything large — the
+   * reference's position times each texture's frequency, and drift with time — is wrapped here in
+   * double precision, so the shader only ever adds small numbers.
+   */
+  setTime(t: number, refX: number, refZ: number): void {
+    const u = this.u;
+    const wd = u['uWindDirTo']!.value as THREE.Vector2;
+    (u['uRef']!.value as THREE.Vector2).set(refX, refZ);
+    // Wind frame (the shader's windFrame · v) and the ripple layers' rotation, applied to the reference.
+    const wa = wd.x * refX + wd.y * refZ, wc = -wd.y * refX + wd.x * refZ;
+    const ra = 0.8339 * refX - 0.5519 * refZ, rc = 0.5519 * refX + 0.8339 * refZ;
+    (u['uOffRipple']!.value as THREE.Vector4).set(
+      fract(refX * 8.3 + wd.x * t * 0.6), fract(refZ * 8.3 + wd.y * t * 0.6),
+      fract(ra * 23 - wd.x * t * 1.3), fract(rc * 23 - wd.y * t * 1.3));
+    (u['uOffFoamA']!.value as THREE.Vector4).set(
+      fract(wa * 0.031 * 0.22 + t * 0.004), fract(wc * 0.031 - t * 0.003),
+      fract(wa * 0.145 * 0.22 - t * 0.011), fract(wc * 0.145 - t * 0.008));
+    (u['uOffFoamB']!.value as THREE.Vector4).set(
+      fract(refX * 0.62 - t * 0.03), fract(refZ * 0.62 + t * 0.021), fract(refX * 0.23), fract(refZ * 0.23));
+    (u['uOffFoamC']!.value as THREE.Vector4).set(fract(refX * 0.92 + 0.31), fract(refZ * 0.92 + 0.31), fract(-t * 0.0003), 0);
+  }
 
   /** Sun, sky reflection and haze from the shared SkyState and the scene fog. */
   syncSky(sky: SkyState, fog: THREE.Fog | THREE.FogExp2 | null): void {
@@ -223,6 +262,7 @@ export class OceanSurfaceMaterial {
 
   dispose(): void {
     this.material.dispose();
+    this.xrayMaterial.dispose();
     this.backdropMaterial.dispose();
     this.skyLightPass.dispose();
     this.skyLight.dispose();
@@ -230,6 +270,8 @@ export class OceanSurfaceMaterial {
     this.envEquirect.dispose();
   }
 }
+
+const fract = (x: number): number => x - Math.floor(x);
 
 /** Waterplane outline for the cockpit cut-out, shrunk to stay inside the hull (boat-local metres). */
 function hullShape(): THREE.Vector4 {

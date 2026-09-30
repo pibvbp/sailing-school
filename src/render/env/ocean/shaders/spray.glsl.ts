@@ -37,7 +37,7 @@ void main() {
   float d = length(q + 0.2 * vec2(sin(vData.z * 31.0), cos(vData.z * 17.0)));
   if (d > 1.0) discard;
   float age = vData.y;
-  float fade = smoothstep(0.0, 0.06, age) * pow(1.0 - age, 1.2);
+  float fade = smoothstep(0.0, 0.06, age) * pow(clamp(1.0 - age, 0.0, 1.0), 1.2);
   float a = pow(1.0 - d * d, 1.2) * fade * 0.7 * vData.w;
   gl_FragColor = vec4(vColor, a);
   #include <tonemapping_fragment>

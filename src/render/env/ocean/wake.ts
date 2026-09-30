@@ -184,6 +184,18 @@ export class BoatWake {
     while (this.count > 0 && this.time - this.rtime[this.head]! >= LIFE) { this.head = (this.head + 1) % ROWS; this.count--; }
   }
 
+  /** One ribbon row at vertex index v (port, centre, starboard); returns the next free index. */
+  private putRow(v: number, x: number, z: number, sx: number, sz: number, fromBow: number, age: number, strength: number): number {
+    const P = this.pos.array as Float32Array, D = this.data.array as Float32Array;
+    const half = Math.max(fromBow * KELVIN, 0.2) * 1.08;
+    for (let side = -1; side <= 1; side++) {
+      P[v * 3] = x + sx * half * side; P[v * 3 + 1] = 0; P[v * 3 + 2] = z + sz * half * side;
+      D[v * 4] = side / 1.08; D[v * 4 + 1] = age; D[v * 4 + 2] = strength; D[v * 4 + 3] = fromBow;
+      v++;
+    }
+    return v;
+  }
+
   /** Oldest row → newest → live stern → bow, 3 vertices each (port, centre, starboard). */
   private drawKelvin(bx: number, bz: number, fx: number, fz: number, speed: number, live: boolean): void {
     const r = this.renderer;
@@ -196,23 +208,14 @@ export class BoatWake {
     r.setClearColor(this.clearColor, prevAlpha);
     r.setRenderTarget(prevTarget);
 
-    const P = this.pos.array as Float32Array, D = this.data.array as Float32Array;
     let v = 0;
-    const put = (x: number, z: number, sx: number, sz: number, fromBow: number, age: number, strength: number) => {
-      const half = Math.max(fromBow * KELVIN, 0.2) * 1.08;
-      for (let side = -1; side <= 1; side++) {
-        P[v * 3] = x + sx * half * side; P[v * 3 + 1] = 0; P[v * 3 + 2] = z + sz * half * side;
-        D[v * 4] = side / 1.08; D[v * 4 + 1] = age; D[v * 4 + 2] = strength; D[v * 4 + 3] = fromBow;
-        v++;
-      }
-    };
     for (let k = 0; k < this.count; k++) {
       const i = (this.head + k) % ROWS;
-      put(this.rx[i]!, this.rz[i]!, this.rsx[i]!, this.rsz[i]!, LWL + this.dist - this.rdist[i]!, this.time - this.rtime[i]!, this.rstr[i]!);
+      v = this.putRow(v, this.rx[i]!, this.rz[i]!, this.rsx[i]!, this.rsz[i]!, LWL + this.dist - this.rdist[i]!, this.time - this.rtime[i]!, this.rstr[i]!);
     }
     if (live && speed > 0.4) {
-      put(bx + fx * HULL.transomWL.x, bz + fz * HULL.transomWL.x, -fz, fx, LWL, 0, armFoam(speed));
-      put(bx + fx * HULL.stemWL.x, bz + fz * HULL.stemWL.x, -fz, fx, 0, 0, armFoam(speed));
+      v = this.putRow(v, bx + fx * HULL.transomWL.x, bz + fz * HULL.transomWL.x, -fz, fx, LWL, 0, armFoam(speed));
+      v = this.putRow(v, bx + fx * HULL.stemWL.x, bz + fz * HULL.stemWL.x, -fz, fx, 0, 0, armFoam(speed));
     }
     const rows = v / 3;
     if (rows < 2) return;

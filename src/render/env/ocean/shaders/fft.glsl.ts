@@ -105,7 +105,8 @@ ${COMMON}
 uniform sampler2D uH0;
 uniform float uN;
 uniform vec3 uLength;
-uniform float uTime;
+uniform float uOmega0;     // 2π / loop period
+uniform float uTimeFrac;   // (t mod period) / period, wrapped in double precision on the CPU
 layout(location = 0) out vec4 oBuf0;
 layout(location = 1) out vec4 oBuf1;
 void main() {
@@ -118,7 +119,10 @@ void main() {
   vec2 k = (local - uN * 0.5) * dk;
   float kLen = max(length(k), 1e-5);
   vec2 kn = k / kLen;
-  float phase = sqrt(G * kLen) * uTime;
+  // ω rounded to a whole multiple of the loop frequency: the sea repeats exactly every period, so the
+  // phase comes from the wrapped time and stays precise over hours of sailing (fp32 ω·t would not).
+  float cycles = floor(sqrt(G * kLen) / uOmega0 + 0.5);
+  float phase = 6.2831853 * fract(cycles * uTimeFrac);
   vec2 e = vec2(cos(phase), sin(phase));
   vec2 h = cmul(h0.xy, e) + cmul(h0.zw, vec2(e.x, -e.y));
   vec2 ih = vec2(-h.y, h.x);

@@ -7,5 +7,6 @@ export default defineConfig(({ command, isPreview }) => ({
   server: { port: 5180, strictPort: false },
   // Serve three's ESM files directly so addons and the app share ONE three instance.
   optimizeDeps: { exclude: ['three'] },
-  test: { environment: 'node', include: ['src/**/*.test.ts'] },
+  // Many tests sail the real simulation for minutes of sim time; a busy machine or a CI runner needs headroom.
+  test: { environment: 'node', include: ['src/**/*.test.ts'], testTimeout: 30_000 },
 }));

@@ -230,7 +230,14 @@ void main() {
 
 export const SURFACE_FRAG = /* glsl */ `
 uniform vec3 uCamPos;
-uniform float uTime;
+// Texture lookups use coordinates relative to a reference near the camera; every large offset (the
+// reference's own position, drift with time) is wrapped in double precision on the CPU, so the finest
+// textures stay sharp and still after hours of sailing and kilometres from the origin.
+uniform vec2 uRef;
+uniform vec4 uOffRipple;   // ripple layer 0 xy, layer 1 xy
+uniform vec4 uOffFoamA;    // whitecap lace fx0 xy, fx1 xy
+uniform vec4 uOffFoamB;    // fx2 xy, boat-foam lace (coarse) xy
+uniform vec4 uOffFoamC;    // boat-foam lace (fine) xy, windrow drift, 0
 uniform vec3 uSunDir;
 uniform vec3 uSunRadiance;
 uniform vec3 uWaterScatter;
@@ -298,10 +305,12 @@ void main() {
   vec2 rel = vWorldPos.xz - uBoat.xy;
   vec2 fwd = uBoat.zw;
   vec2 boatLocal = vec2(dot(rel, fwd), dot(rel, vec2(-fwd.y, fwd.x)));
-  // Keep water out of the cockpit (no colour, no depth: the deck behind it must still draw).
-  if (uHullState.x > 0.5 && insideHull(boatLocal) > 0.5) discard;
+  // Water inside the hull's waterplane (the cockpit) is discarded at the very end, after every
+  // implicit-derivative texture tap (a discard before them leaves derivatives undefined in the quad).
+  bool insideCutout = uHullState.x > 0.5 && insideHull(boatLocal) > 0.5;
 
   vec2 q = vQ;
+  vec2 qr = q - uRef;
   vec2 ddx = dFdx(q);
   vec2 ddy = dFdy(q);
   // Pixel footprint on the water: the minor axis is what anisotropic taps still resolve; roughness is
@@ -362,11 +371,10 @@ void main() {
   float microFade = 1.0 - smoothstep(0.004, 0.04, fpShade);
   float rippleAmp = smoothstep(0.8, 5.0, localWind) * rough * 0.1;
   if (microFade > 0.004) {
-    vec2 drift = uWindDirTo * uTime;
     mat2 rotA = mat2(0.8339, 0.5519, -0.5519, 0.8339);
-    vec2 qA = rotA * q;
-    vec3 r0 = textureGrad(uRippleTex, q * 8.3 + drift * 0.6, ddx * 8.3, ddy * 8.3).xyz * 2.0 - 1.0;
-    vec3 r1 = textureGrad(uRippleTex, qA * 23.0 - drift * 1.3, rotA * ddx * 23.0, rotA * ddy * 23.0).xyz * 2.0 - 1.0;
+    vec2 qA = rotA * qr;
+    vec3 r0 = textureGrad(uRippleTex, qr * 8.3 + uOffRipple.xy, ddx * 8.3, ddy * 8.3).xyz * 2.0 - 1.0;
+    vec3 r1 = textureGrad(uRippleTex, qA * 23.0 + uOffRipple.zw, rotA * ddx * 23.0, rotA * ddy * 23.0).xyz * 2.0 - 1.0;
     vec2 micro = (r0.xz * 0.6 + (r1.xz * rotA) * 0.4) * microFade * rippleAmp;
     N = normalize(N + vec3(micro.x, 0.0, micro.y));
   }
@@ -378,7 +386,10 @@ void main() {
   vec3 lost = clamp(log2(max(2.0 * fpShade / uBandLambdaMin, vec3(1.0))) / uBandOctaves, 0.0, 1.0);
   float mssLost = dot(uCascadeMss * vec3(1.0, rough1 * rough1, rough * rough), lost);
   float mssRipple = 0.12 * rippleAmp * rippleAmp * (1.0 - microFade);
-  float mssUnres = uUnresolvedMss * windRatio * (1.0 - 0.75 * slick) + mssLost + mssRipple + 0.0004;
+  // Sub-millimetre capillaries ride on everything even where the ripple texture is resolved: a small
+  // floor near the eye keeps close water satin rather than a crumpled mirror.
+  float mssCapillary = 0.1 * coxMunk(localWind) * microFade * (1.0 - 0.75 * slick);
+  float mssUnres = uUnresolvedMss * windRatio * (1.0 - 0.75 * slick) + mssLost + mssRipple + mssCapillary + 0.0004;
   float alpha = clamp(sqrt(mssUnres) * 1.15, 0.018, 0.65);
   float roughness = sqrt(alpha);
 
@@ -405,12 +416,13 @@ void main() {
   vec2 wd = uWindDirTo;
   mat2 windFrame = mat2(wd.x, -wd.y, wd.y, wd.x);
   vec2 qs = windFrame * q;
+  vec2 qsr = windFrame * qr;
   vec2 gx = windFrame * ddx, gy = windFrame * ddy;
   if (uStreaks > 0.001) {
     // Ridges of a meandering noise across the wind make continuous lines a few metres apart; a second,
     // coarser noise breaks them into patches tens of metres long.
     float meander = texture(uNoiseTex, qs * 0.0021).x - 0.5;
-    float n = texture(uNoiseTex, vec2(qs.x * 0.0035 - uTime * 0.0003, qs.y * 0.043 + meander * 0.9)).z;
+    float n = texture(uNoiseTex, vec2(qs.x * 0.0035 + uOffFoamC.z, qs.y * 0.043 + meander * 0.9)).z;
     float line = smoothstep(0.86, 0.97, 1.0 - abs(n * 2.0 - 1.0));
     float patches = smoothstep(0.42, 0.7, texture(uNoiseTex, vec2(qs.x * 0.009, qs.y * 0.035) + 0.37).w);
     foamMask += line * patches * 0.3 * uStreaks;
@@ -418,13 +430,13 @@ void main() {
   float foam = 0.0, foamThin = 0.0, foamFine = 0.5;
   if (foamMask > 0.015 || wakeDensity > 0.015) {
     vec2 stretch = vec2(0.22, 1.0);
-    vec4 fx1 = textureGrad(uFoamTex, qs * 0.145 * stretch - vec2(uTime * 0.011, uTime * 0.008), gx * 0.145 * stretch, gy * 0.145 * stretch);
-    vec4 fx2 = textureGrad(uFoamTex, q * 0.62 + vec2(-uTime * 0.03, uTime * 0.021), ddx * 0.62, ddy * 0.62);
+    vec4 fx1 = textureGrad(uFoamTex, qsr * 0.145 * stretch + uOffFoamA.zw, gx * 0.145 * stretch, gy * 0.145 * stretch);
+    vec4 fx2 = textureGrad(uFoamTex, qr * 0.62 + uOffFoamB.xy, ddx * 0.62, ddy * 0.62);
     foamFine = fx2.g * 0.6 + fx1.g * 0.4;
     if (foamMask > 0.015) {
       // Coverage, not paint: the local foam amount decides what fraction of a lace pattern (bubble-raft
       // cells + wind streaks) turns white, so even dense foam keeps its holes and ragged edges.
-      vec4 fx0 = textureGrad(uFoamTex, qs * 0.031 * stretch + vec2(uTime * 0.004, -uTime * 0.003), gx * 0.031 * stretch, gy * 0.031 * stretch);
+      vec4 fx0 = textureGrad(uFoamTex, qsr * 0.031 * stretch + uOffFoamA.xy, gx * 0.031 * stretch, gy * 0.031 * stretch);
       float lace = fx2.r * 0.45 + fx1.a * 0.3 + fx0.a * 0.25;
       // Filtering averages distant caps away; boost coverage with the footprint to keep them.
       float cover = clamp(foamMask * mix(1.0, 1.8, smoothstep(0.3, 3.0, fpShade)), 0.0, 0.8);
@@ -434,13 +446,10 @@ void main() {
     }
     if (wakeDensity > 0.015) {
       // Boat foam, lace not paint: the density decides what fraction of a bubble-raft pattern turns
-      // white, drawn out along the boat's track because the hull leaves it behind as it slides past.
-      vec2 side = vec2(-fwd.y, fwd.x);
-      vec2 hq = vec2(dot(q, fwd), dot(q, side)) * vec2(0.11, 0.42);
-      vec2 hgx = vec2(dot(ddx, fwd), dot(ddx, side)) * vec2(0.11, 0.42), hgy = vec2(dot(ddy, fwd), dot(ddy, side)) * vec2(0.11, 0.42);
-      vec4 wf = textureGrad(uFoamTex, hq, hgx, hgy);
-      // A 4× finer layer keeps close-ups bubbly (cells of a few centimetres across the track).
-      vec4 wn = textureGrad(uFoamTex, hq * 4.0 + 0.31, hgx * 4.0, hgy * 4.0);
+      // white. The pattern is fixed in the water, so the hull slides through it and the foam streams aft.
+      vec4 wf = textureGrad(uFoamTex, qr * 0.23 + uOffFoamB.zw, ddx * 0.23, ddy * 0.23);
+      // A 4× finer layer keeps close-ups bubbly (cells of a few centimetres).
+      vec4 wn = textureGrad(uFoamTex, qr * 0.92 + uOffFoamC.xy, ddx * 0.92, ddy * 0.92);
       float lace = wf.r * 0.42 + wn.r * 0.33 + fx2.r * 0.15 + wf.a * 0.1;
       float edge = 1.0 - clamp(wakeDensity * 0.95, 0.0, 0.95);
       float wakeFoam = smoothstep(edge - 0.05, edge + 0.05, lace);
@@ -466,12 +475,19 @@ void main() {
   // Sunlight through a thin crest reaches the eye filtered by a metre of water: red is gone, so the
   // glow is green-cyan (not the deep blue of the volume seen from above).
   float crest = clamp(0.5 + vWaveY / max(uHs, 0.05), 0.0, 1.5);
-  float backlit = crest * pow(clamp(dot(L, -V), 0.0, 1.0), 4.0) * pow(0.5 - 0.5 * dot(L, N), 3.0);
+  float backlit = crest * pow(clamp(dot(L, -V), 0.0, 1.0), 4.0) * pow(clamp(0.5 - 0.5 * dot(L, N), 0.0, 1.0), 3.0);
   vec3 scatter = vec3(0.012, 0.095, 0.08) * sunRad * backlit;
   float sunUp = max(L.y, 0.0);
   vec3 beam = sunRad * sunUp * (1.0 - oFresnelWater(max(sunUp, 1e-3), 0.0)) / 3.14159265;
   vec3 bodyLight = bodyR * (beam + skyAmb * 0.94);
   scatter += bodyLight;
+  // Light entering the thin upper part of a wave and leaving through a face turned toward the eye: the
+  // translucent cyan-green of wave faces, at any sun angle (the troughs stay deep blue). Weighted by
+  // the transmission (1 − F) through the mix with the reflection below.
+  float thin = smoothstep(0.05, 0.95, vWaveY / max(uHs * 0.5, 0.05));
+  vec2 eyeDir = V.xz / max(length(V.xz), 1e-4);
+  float towardEye = smoothstep(0.03, 0.25, dot(N.xz, eyeDir));
+  scatter += vec3(0.006, 0.042, 0.052) * (beam + skyAmb) * thin * towardEye;
   // Entrained bubbles under the surface scatter strongly: aerated water (a breaking crest, the churn
   // behind a transom) turns light turquoise before any white foam shows on top.
   scatter += vec3(0.30, 0.78, 0.82) * 0.16 * clamp(bubbles, 0.0, 1.0) * (beam + skyAmb);
@@ -517,7 +533,7 @@ void main() {
     float aP = clamp(alpha + 0.0047, 0.0, 1.0);
     float D = oGgxD(NoH, aP) * (alpha * alpha) / (aP * aP);
     float Vis = oSmithGgxCorrelated(NoV, max(NoL, 1e-4), alpha);
-    float Fs = 0.02 + 0.98 * pow(1.0 - VoH, 5.0);
+    float Fs = 0.02 + 0.98 * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);
     spec = sunRad * D * Vis * Fs * NoL;
   }
 
@@ -555,6 +571,7 @@ void main() {
       : m == 6 ? vec3(F) : vec3(kelvinFoam, 0.5 + kelvinSlope * 2.0);
     gl_FragColor = vec4(dbg, 1.0);
   }
+  if (insideCutout) discard;
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }

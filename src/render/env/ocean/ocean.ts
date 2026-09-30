@@ -15,7 +15,19 @@ import { BoatWake } from './wake';
 
 export type { OceanBoat, OceanParams, OceanSampler, PuffPatch } from './types';
 
+/** Sampler queries within this distance of the boat are its own (hull, spray) and use the fine grid. */
+const BOAT_OWN_RADIUS = 4.5;
+const _camPos = new THREE.Vector3();
+
 export class Ocean {
+  /**
+   * Whether this GPU can run the ocean: the FFT, wake and probe render into half-float (or float)
+   * targets. Without either extension the app should fall back (plan Review Focus #4).
+   */
+  static isSupported(renderer: THREE.WebGLRenderer): boolean {
+    return renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float');
+  }
+
   /** Height/normal of the drawn surface, one frame late (0 / up until the first readback lands). */
   readonly sampler: OceanSampler;
   private readonly textures: OceanTextures;
@@ -28,6 +40,8 @@ export class Ocean {
   private readonly reflection: PlanarReflection;
   private readonly spray: BowSpray;
   private boat: OceanBoat | null = null;
+  private readonly boatState: OceanBoat = { e: 0, n: 0, heading: 0, speed: 0, heel: 0 };
+  private readonly spacing = { row: 0, col: 0 };
   private xrayOn = false;
   private xray = 0;
   private seaVersion = -1;
@@ -52,6 +66,7 @@ export class Ocean {
     this.backdrop.visible = false;
     this.backdrop.frustumCulled = false;
     this.spray = new BowSpray(this.surface.uniforms);
+    this.spray.setQuality(q);
     scene.add(this.oceanMesh.mesh, this.backdrop, this.spray.points);
     this.reflection = new PlanarReflection([this.oceanMesh.mesh, this.backdrop, this.spray.points]);
     this.reflection.setQuality(q.reflections);
@@ -65,12 +80,20 @@ export class Ocean {
   get mesh(): THREE.Mesh { return this.oceanMesh.mesh; }
   get seaState(): SeaState { return this.cascades.seaState; }
   get triangles(): number { return this.oceanMesh.triangles; }
+  /** Diagnostics: registered sampler points (marks, camera) and the grids' value at a point, ignoring them. */
+  get probePointCount(): number { return this.probe.registry.points.length; }
+  sampleGridsOnly(x: number, z: number, out: { h: number; sx: number; sz: number }): boolean { return this.probe.grids.sampleGridsOnly(x, z, out); }
   /** Diagnostics: bow-spray droplets alive and the bow-burial rate driving them. */
   get sprayStats(): Readonly<{ live: number; rate: number; maxRate: number }> { return this.spray.stats; }
 
   setParams(p: OceanParams): void { this.cascades.setParams(p); }
   setPuffs(p: readonly PuffPatch[]): void { this.surface.setPuffs(p); }
-  setBoat(b: OceanBoat | null): void { this.boat = b ? { ...b } : null; }
+  setBoat(b: OceanBoat | null): void {
+    if (!b) { this.boat = null; return; }
+    const s = this.boatState;
+    s.e = b.e; s.n = b.n; s.heading = b.heading; s.speed = b.speed; s.heel = b.heel;
+    this.boat = s;
+  }
   setXray(on: boolean): void { this.xrayOn = on; }
   /** Keep objects out of the planar reflection (sky domes named 'sky' are found automatically). */
   excludeFromReflection(...objects: THREE.Object3D[]): void { this.reflection.addExclusions(...objects); }
@@ -82,10 +105,24 @@ export class Ocean {
     this.oceanMesh.setDetail(q.oceanMeshDetail);
     this.wake.setQuality(q);
     this.reflection.setQuality(q.reflections);
+    this.spray.setQuality(q);
   }
 
   /** Advance to sea time `t` (s) by `dt`; `camera` is the main view (probe focus when there is no boat). */
   update(dt: number, t: number, camera: THREE.Camera): void {
+    _camPos.setFromMatrixPosition(camera.matrixWorld);
+    const focusX = this.boat ? this.boat.e : _camPos.x;
+    const focusZ = this.boat ? -this.boat.n : _camPos.z;
+    // Registered points (marks, camera clearance) are probed at the mesh's level of detail for this
+    // camera; the boat's own queries stay on the fine grid.
+    const v = this.probe.view;
+    v.camX = _camPos.x; v.camY = _camPos.y; v.camZ = _camPos.z;
+    this.oceanMesh.angularSpacing(camera, this.spacing);
+    v.rowAngle = this.spacing.row; v.colAngle = this.spacing.col;
+    this.probe.exclusionX = focusX;
+    this.probe.exclusionZ = focusZ;
+    this.probe.exclusionRadius = this.boat ? BOAT_OWN_RADIUS : -1;
+
     this.surface.syncSky(this.sky, this.scene.fog as THREE.Fog | THREE.FogExp2 | null);
     if (!this.skip.fft) this.cascades.update(t, dt);
     if (this.seaVersion !== this.cascades.version) {
@@ -93,7 +130,7 @@ export class Ocean {
       const p = this.cascades.oceanParams;
       this.surface.setSeaState(this.cascades.seaState, p.windSpeed, p.windFrom, this.cascades.stats);
     }
-    this.surface.setTime(t);
+    this.surface.setTime(t, _camPos.x, _camPos.z);
 
     this.sinceBoat = this.boat ? 0 : this.sinceBoat + dt;
     const wakeLive = this.sinceBoat < 90;
@@ -104,7 +141,7 @@ export class Ocean {
     this.surface.setBoat(this.boat, this.boat ? this.xray : 0);
     // Opaque and first while the water hides everything below it, so early depth rejection skips the
     // sky dome and hull behind it; blended after the opaque scene only while the x-ray window is open.
-    this.surface.material.transparent = this.boat !== null && this.xray > 0.005;
+    this.oceanMesh.mesh.material = this.boat !== null && this.xray > 0.005 ? this.surface.xrayMaterial : this.surface.material;
     this.backdrop.visible = this.boat !== null && this.xray > 0.005;
     if (this.boat) this.backdrop.position.set(this.boat.e, -7, -this.boat.n);
 
@@ -112,8 +149,6 @@ export class Ocean {
     this.spray.wind.set(-Math.sin(p.windFrom) * p.windSpeed, Math.cos(p.windFrom) * p.windSpeed);
     this.spray.update(dt, t, this.boat, this.probe);
 
-    const focusX = this.boat ? this.boat.e : camera.position.x;
-    const focusZ = this.boat ? -this.boat.n : camera.position.z;
     // Mirror about the water under the boat (or the camera). The hull floats at that level, so the clip
     // sits just under its waterline (its bottom must not reflect); without a boat, below the troughs so
     // floating marks keep their waterline.

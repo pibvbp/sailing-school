@@ -68,6 +68,12 @@ function dataTexture(data: Float32Array, w: number, h: number): THREE.DataTextur
   return tex;
 }
 
+/**
+ * The sea repeats every 20 minutes: wave frequencies are rounded to multiples of 2π/1200 s (at most
+ * 0.4 % off for the 9 s swell, far less for wind waves), which keeps every wave's phase exact in fp32.
+ */
+export const LOOP_PERIOD_S = 1200;
+
 /** Spectrum description handed to the GPU: a = (amplitude, angle, swell, fade), b = (α, ωp, γ, 0). */
 export interface SpectrumUniforms { windA: THREE.Vector4; windB: THREE.Vector4; swellA: THREE.Vector4; swellB: THREE.Vector4 }
 
@@ -113,7 +119,8 @@ export class PackedFFT {
     }, 'oceanSpectrum');
     this.conjPass = new FullScreenPass(CONJUGATE_FRAG, { uH0: { value: this.h0.texture }, uN: { value: n } }, 'oceanConjugate');
     this.timePass = new FullScreenPass(TIME_FRAG, {
-      uH0: { value: this.h0k.texture }, uN: { value: n }, uLength: { value: vec3(lengths) }, uTime: { value: 0 },
+      uH0: { value: this.h0k.texture }, uN: { value: n }, uLength: { value: vec3(lengths) },
+      uOmega0: { value: (2 * Math.PI) / LOOP_PERIOD_S }, uTimeFrac: { value: 0 },
     }, 'oceanTimeSpectrum');
     this.butterflyPass = new FullScreenPass(BUTTERFLY_FRAG, {
       uButterfly: { value: this.butterfly }, uSrc0: { value: null }, uSrc1: { value: null },
@@ -133,7 +140,8 @@ export class PackedFFT {
 
   /** Runs the time evolution and the 2-D inverse transform; returns the target holding the fields. */
   transform(renderer: THREE.WebGLRenderer, time: number): THREE.WebGLRenderTarget {
-    this.timePass.set('uTime', time).render(renderer, this.ping);
+    const wrapped = ((time % LOOP_PERIOD_S) + LOOP_PERIOD_S) % LOOP_PERIOD_S;
+    this.timePass.set('uTimeFrac', wrapped / LOOP_PERIOD_S).render(renderer, this.ping);
     let src = this.ping, dst = this.pong;
     const bp = this.butterflyPass;
     for (let vertical = 0; vertical < 2; vertical++) {

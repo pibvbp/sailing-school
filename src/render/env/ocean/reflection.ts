@@ -38,6 +38,10 @@ export class PlanarReflection {
 
   constructor(private readonly exclude: THREE.Object3D[]) {}
 
+  private readonly hideFlagged = (o: THREE.Object3D): void => {
+    if (o.userData['noReflect'] === true && o.visible) { o.visible = false; this.hidden.push(o); }
+  };
+
   /** Objects that must not appear in the mirror (the app's own sky dome, overlays under the water, …). */
   addExclusions(...objects: THREE.Object3D[]): void { this.exclude.push(...objects); }
 
@@ -64,7 +68,10 @@ export class PlanarReflection {
       this.skyCheckFrames = 120;
     }
     this.hidden.length = 0;
-    for (const o of [...this.exclude, ...this.skies]) if (o.visible) { o.visible = false; this.hidden.push(o); }
+    for (const o of this.exclude) if (o.visible) { o.visible = false; this.hidden.push(o); }
+    for (const o of this.skies) if (o.visible) { o.visible = false; this.hidden.push(o); }
+    // Anything flagged userData.noReflect (teaching overlays: arrows, particles, laylines…) stays out too.
+    scene.traverseVisible(this.hideFlagged);
     const background = scene.background;
     scene.background = null;
 

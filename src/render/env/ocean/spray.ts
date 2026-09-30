@@ -6,6 +6,7 @@
 // Copyright (c) 2026 Davi (Token-Gremlin), MIT License — adapted for sailing-school.
 import * as THREE from 'three';
 import { BOAT } from '../../../shared/boatSpec';
+import type { QualitySettings } from '../../core/types';
 import { SPRAY_FRAG, SPRAY_VERT } from './shaders/spray.glsl';
 import type { OceanBoat, OceanSampler } from './types';
 
@@ -48,7 +49,11 @@ export class BowSpray {
   private bowFollow = 0;
   private lastImmersion = 0;
   private smoothRate = 0;
+  private slamAcc = 0;
   private steadyAcc = 0;
+  /** Live-droplet cap for the quality tier (spec §9.2 particle counts). */
+  private limit = MAX;
+  private live = 0;
   private primed = false;
   /** Wind the droplets relax toward (world x/z, m/s). */
   readonly wind = new THREE.Vector2();
@@ -86,6 +91,10 @@ export class BowSpray {
     };
   }
 
+  setQuality(q: QualitySettings): void {
+    this.limit = Math.max(150, Math.round(MAX * q.particleScale));
+  }
+
   update(dt: number, t: number, boat: OceanBoat | null, sampler: OceanSampler): void {
     if (dt <= 0) return;
     if (boat) this.emit(dt, t, boat, sampler);
@@ -119,16 +128,20 @@ export class BowSpray {
     const drive = THREE.MathUtils.smoothstep(speed, 1.2, 3.2);
     // Slamming: the faster the face climbs the bow, the bigger the sheet.
     const slam = Math.max(0, rate - 0.18) * drive;
-    let count = Math.min(90, slam * 1500 * dt);
+    // Rates in droplets per second, accumulated so light slams still emit at any frame rate.
+    this.slamAcc += Math.min(slam * 1500, 5400) * dt;
     // A light steady sheet off the stem near hull speed.
     this.steadyAcc += 160 * THREE.MathUtils.smoothstep(speed, 2.6, 3.8) * dt;
     const strength = Math.min(1.4, 0.45 + slam * 2.2);
-    while (this.steadyAcc >= 1) { this.steadyAcc -= 1; count += 1; }
-    for (let i = 0; i < Math.floor(count); i++) this.spawnBow(b, speed, i & 1 ? 1 : -1, strength, sampler, t);
+    let count = 0;
+    while (this.slamAcc >= 1) { this.slamAcc -= 1; count++; }
+    while (this.steadyAcc >= 1) { this.steadyAcc -= 1; count++; }
+    for (let i = 0; i < count; i++) this.spawnBow(b, speed, i & 1 ? 1 : -1, strength, sampler, t);
   }
 
   private spawnBow(b: OceanBoat, speed: number, side: number, strength: number, sampler: OceanSampler, t: number): void {
-    if (this.freeCount === 0) return;
+    if (this.freeCount === 0 || this.live >= this.limit) return;
+    this.live++;
     const r = this.rand;
     const fx = Math.sin(b.heading), fz = -Math.cos(b.heading);
     const sx = -fz, sz = fx; // starboard
@@ -172,6 +185,7 @@ export class BowSpray {
       n++;
     }
     this.stats.live = n;
+    this.live = n;
     this.points.geometry.setDrawRange(0, n);
     this.points.visible = n > 0;
     if (n > 0) {

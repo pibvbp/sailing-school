@@ -29,6 +29,7 @@ export interface StageOptions {
   windSpeed: number;
   cameraPos: [number, number, number];
   target: [number, number, number];
+  fov?: number;
 }
 
 export function createStage(o: StageOptions): OceanStage {
@@ -36,7 +37,7 @@ export function createStage(o: StageOptions): OceanStage {
 }
 
 function kitStage(o: StageOptions): OceanStage {
-  const kit = createDemoKit({ fov: 50, cameraPos: o.cameraPos, target: o.target, hour: o.hour });
+  const kit = createDemoKit({ fov: o.fov ?? 50, cameraPos: o.cameraPos, target: o.target, hour: o.hour });
   kit.camera.far = 40000;
   kit.camera.updateProjectionMatrix();
   kit.renderer.setPixelRatio(Math.min(devicePixelRatio, o.quality.pixelRatioCap) * o.quality.renderScale);
@@ -57,7 +58,7 @@ function productionStage(o: StageOptions): OceanStage {
   const renderer = createRenderer(canvas);
   renderer.info.autoReset = false;
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 40000);
+  const camera = new THREE.PerspectiveCamera(o.fov ?? 50, innerWidth / innerHeight, 0.1, 40000);
   camera.position.set(...o.cameraPos);
   const controls = new OrbitControls(camera, canvas);
   controls.target.set(...o.target);

@@ -1,12 +1,12 @@
 // Ocean demo: FFT sea, whitecaps, glitter, gust patches, wake, x-ray and the height sampler.
 //   ?prod=1 renders through the production renderer, SkySystem, Lighting and PostChain (as the app does).
 //   ?wind=12 (kn) &dir=240 (wind FROM, deg) &hour=17 &boat=1 (hull proxy circling at 5 kn)
-//   &speed=5 (boat, kn) &puffs=1 (gust + lull patches) &xray=1 &cam=low|eye|high &az=<deg camera bearing from target>
+//   &speed=5 (boat, kn) &puffs=1 (gust + lull patches) &xray=1 &marks=1 (buoys 30 m and 80 m beyond the boat) &cam=low|eye|high &az=<deg camera bearing from target>
 //   &tier=ultra|high|medium|low &refl=off|half|full &swell=0.3 &fetch=15 &chop=1.1 &preroll=<s>
 //   &freeze=1 (fixed 1/60 s steps for 2 s of frames — the sampler and spray need real frames — then time
 //   stops: a repeatable photograph) &aim=<m> (camera aims this far forward of
-//   the boat's centre, e.g. 3 = the bow) &dist= &height= (camera offset from the aim point)
-// Diagnostics: &timing=1 (GPU cost → window.__oceanTiming) &debug=1…7 (wake, foam, normal, roughness,
+//   the boat's centre, e.g. 3 = the bow) &dist= &height= (camera offset from the aim point) &fov=50
+// Diagnostics: &check=1 (sampler point probes vs grids → window.__samplerCheck) &timing=1 (GPU cost → window.__oceanTiming) &debug=1…7 (wake, foam, normal, roughness,
 // gusts, Fresnel, Kelvin) &skip=fft,wake,probe &nodraw=1
 import * as THREE from 'three';
 import { createStage } from './oceanStage';
@@ -21,6 +21,7 @@ declare global {
   interface Window {
     __ocean?: Record<string, unknown>;
     __oceanTiming?: Record<string, number | string>;
+    __samplerCheck?: Record<string, unknown>;
   }
 }
 
@@ -41,7 +42,7 @@ if (params.has('refl')) q.reflections = params.get('refl') as typeof q.reflectio
 const windKn = num('wind', 12);
 const windFrom = deg(num('dir', 240));
 const kit = createStage({
-  prod: flag('prod'), quality: q, hour: num('hour', 17), windFrom, windSpeed: windKn * KN,
+  prod: flag('prod'), quality: q, hour: num('hour', 17), windFrom, windSpeed: windKn * KN, fov: num('fov', 50),
   cameraPos: [Math.sin(camAz) * camDist, camHeight, -Math.cos(camAz) * camDist], target: [0, 0.6, 0],
 });
 
@@ -158,6 +159,33 @@ const buoyPos = (() => {
   return { e: r * Math.sin(a), n: r * Math.cos(a) };
 })();
 
+// ------------------------------------------------------------------ distant marks (&marks=1)
+// Buoys 30 m and 80 m beyond the boat, as the app's Marks drive them: heave from heightAt at the centre,
+// tilt from ±0.6 m slopes. Their queries register point probes, so they ride the drawn chop exactly.
+interface DemoMark { e: number; n: number; obj: THREE.Object3D; roll: number; pitch: number }
+const farMarks: DemoMark[] = [];
+if (flag('marks')) {
+  // The camera keeps its offset from the boat, so "beyond the boat" is along target − camera.
+  const b = boatState(boatAngle + OMEGA * preroll);
+  const away = new THREE.Vector2(kit.controls.target.x - kit.camera.position.x, kit.controls.target.z - kit.camera.position.z).normalize();
+  for (const [dist, side] of [[30, 6], [80, -14]] as const) {
+    const x = b.e + away.x * dist - away.y * side, z = -b.n + away.y * dist + away.x * side;
+    const obj = buoy.clone();
+    kit.scene.add(obj);
+    farMarks.push({ e: x, n: -z, obj, roll: 0, pitch: 0 });
+  }
+}
+function updateFarMarks(): void {
+  const s = ocean.sampler;
+  for (const m of farMarks) {
+    const h = s.heightAt(m.e, m.n, seaTime);
+    const slopeE = (s.heightAt(m.e + 0.6, m.n, seaTime) - s.heightAt(m.e - 0.6, m.n, seaTime)) / 1.2;
+    const slopeN = (s.heightAt(m.e, m.n + 0.6, seaTime) - s.heightAt(m.e, m.n - 0.6, seaTime)) / 1.2;
+    m.obj.position.set(m.e, h, -m.n);
+    m.obj.rotation.set(Math.atan(slopeN), 0, -Math.atan(slopeE), 'XZY');
+  }
+}
+
 // ------------------------------------------------------------------ gust / lull patches
 const puffs: PuffPatch[] = [];
 if (flag('puffs')) {
@@ -204,6 +232,7 @@ function step(dt: number): void {
   } else {
     target.set(0, 0.6, 0);
   }
+  updateFarMarks();
   const hb = s.heightAt(buoyPos.e, buoyPos.n, seaTime);
   const nb = s.normalAt(buoyPos.e, buoyPos.n, seaTime);
   buoy.position.set(buoyPos.e, hb, -buoyPos.n);
@@ -278,11 +307,37 @@ kit.onFrame((dt) => {
     windKn, hs: +st.totalHs.toFixed(3), windHs: +st.windHs.toFixed(3), tp: +st.windTp.toFixed(2),
     buoyY: +buoy.position.y.toFixed(3), heave: +pose.heave.toFixed(3), triangles: ocean.triangles,
     spray: { ...ocean.sprayStats },
-    boat: boat ? { x: +boat.position.x.toFixed(2), z: +boat.position.z.toFixed(2), rotY: +boat.rotation.y.toFixed(3) } : null,
-    bowWorld: boat ? boat.localToWorld(new THREE.Vector3(0, 0, -3.3)).toArray().map((v) => +v.toFixed(2)) : null,
-    camera: kit.camera.position.toArray().map((v) => +v.toFixed(2)),
-    target: kit.controls.target.toArray().map((v) => +v.toFixed(2)),
+    probePoints: ocean.probePointCount,
   };
+  if (flag('check')) window.__samplerCheck = samplerCheck();
 });
+/**
+ * &check=1: for each far mark (and a point 12 m upwind of the boat, inside the fine grid), the sampler's
+ * registered-point value against what the boat grids would have served there — the review's I-1 gap.
+ */
+const checkSums = new Map<string, { n: number; d2: number; p2: number }>();
+function samplerCheck(): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const grid = { h: 0, sx: 0, sz: 0 };
+  const points: Array<[string, number, number]> = farMarks.map((m, i) => [`mark${i}`, m.e, m.n]);
+  if (boat) {
+    const b = boatState(boatAngle);
+    points.push(['upwind12m', b.e + Math.sin(windFrom) * 12, b.n + Math.cos(windFrom) * 12]);
+  }
+  for (const [name, e, n] of points) {
+    const probed = ocean.sampler.heightAt(e, n, seaTime);
+    const hasGrid = ocean.sampleGridsOnly(e, -n, grid);
+    // RMS over the animated frames (the instantaneous difference depends on the wave phase there).
+    const acc = checkSums.get(name) ?? { n: 0, d2: 0, p2: 0 };
+    if (hasGrid && frame > 10 && frame < 120) { acc.n++; acc.d2 += (probed - grid.h) ** 2; acc.p2 += probed * probed; }
+    checkSums.set(name, acc);
+    out[name] = {
+      probed: +probed.toFixed(3), grids: hasGrid ? +grid.h.toFixed(3) : null,
+      rmsHeight: acc.n ? +Math.sqrt(acc.p2 / acc.n).toFixed(3) : null,
+      rmsGridError: acc.n ? +Math.sqrt(acc.d2 / acc.n).toFixed(3) : null, frames: acc.n,
+    };
+  }
+  return out;
+}
 kit.start();
 

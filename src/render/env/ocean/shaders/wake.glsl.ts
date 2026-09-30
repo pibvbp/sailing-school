@@ -107,7 +107,8 @@ void main() {
   float inner = 1.0 - smoothstep(0.5, 0.92, u);
   float transverse = cos(6.2832 * fromBow / lambdaT) * inner * decayT;
   // Divergent waves pile up into the cusp line at the wedge edge, with short oblique crests.
-  float cusp = exp(-pow((u - 0.84) / 0.16, 2.0));
+  float c = (u - 0.84) / 0.16;
+  float cusp = exp(-c * c);
   float divergent = cos(6.2832 * (fromBow + u * half_ * 1.3) / (0.62 * lambdaT)) * cusp * decayD * 1.6;
   float fade = 1.0 - smoothstep(0.75, 1.0, age / 14.0);
   float height = amp * (transverse * 0.7 + divergent) * fade;

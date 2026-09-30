@@ -43,9 +43,20 @@ export interface OceanBoat {
   heel: number;
 }
 
+/**
+ * Height and normal of the drawn sea on the CPU, one frame late (0 / straight up until the first
+ * readback lands, 2–3 frames after start).
+ *  • Queries farther than a few metres from the boat (marks, the camera) register themselves and are
+ *    exact from the next readback on: the drawn surface at the mesh's level of detail there, including
+ *    the boat's Kelvin and near-field waves and the camera-relative earth curvature. Until then, and
+ *    beyond 24 registered points, they fall back to the grids below.
+ *  • The boat's own queries (within ≈ 4.5 m of it) use a fine 40 m grid of the wind sea and swell only —
+ *    a hull must not heave on the waves it makes itself; beyond that a coarse 1.6 km grid (≈ 25 m nodes,
+ *    swell and long waves only).
+ */
 export interface OceanSampler {
   /** Height of the drawn surface above mean sea level (m) at sim-world (e, n) and time t (s). */
   heightAt(e: number, n: number, t: number): number;
-  /** Unit surface normal in the three.js world frame (X east, Y up, Z south). */
-  normalAt(e: number, n: number, t: number): { x: number; y: number; z: number };
+  /** Unit surface normal in the three.js world frame (X east, Y up, Z south); fills `out` when given. */
+  normalAt(e: number, n: number, t: number, out?: { x: number; y: number; z: number }): { x: number; y: number; z: number };
 }

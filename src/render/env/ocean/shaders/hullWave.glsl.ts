@@ -23,6 +23,8 @@ float hullDistance(vec2 l) {
   return max(abs(l.y) - hullHalfBeam(l.x), 0.0);
 }
 
+float hwSq(float x) { return x * x; }   // not pow(x, 2.0): undefined for x < 0 in GLSL ES
+
 /** (height m, breaking 0..1) of the hull's own waves at boat-local point l for speed V (m/s). */
 vec2 hullWave(vec2 l, float speed) {
   float amp = min(speed * speed / 19.62, 0.6) * 0.35;
@@ -32,13 +34,13 @@ vec2 hullWave(vec2 l, float speed) {
   float d = hullDistance(l);
   // Crests are swept aft as they spread away from the hull (about 35°) and decay with distance.
   float xb = stem - 0.08 * lwl - d * 1.45;
-  float bow = exp(-pow((l.x - xb) / (0.07 * lwl + 0.12 * d), 2.0)) * exp(-d / (0.35 * lwl));
+  float bow = exp(-hwSq((l.x - xb) / (0.07 * lwl + 0.12 * d))) * exp(-d / (0.35 * lwl));
   vec2 s = l - vec2(stem, 0.0);
   float heap = exp(-dot(s, s) / 0.3);
   float xm = stem - 0.5 * lwl - d * 1.2;
-  float trough = exp(-pow((l.x - xm) / (0.17 * lwl), 2.0)) * exp(-d / (0.3 * lwl));
+  float trough = exp(-hwSq((l.x - xm) / (0.17 * lwl))) * exp(-d / (0.3 * lwl));
   float xs = transom + 0.02 * lwl - d * 1.25;
-  float sternWave = exp(-pow((l.x - xs) / (0.1 * lwl), 2.0)) * exp(-d / (0.3 * lwl));
+  float sternWave = exp(-hwSq((l.x - xs) / (0.1 * lwl))) * exp(-d / (0.3 * lwl));
   float h = amp * (1.05 * bow + 0.7 * heap - 0.6 * trough + 0.65 * sternWave);
   // The crest spills where it is steepest: hard against the stem, thinning along the first metres of
   // topside (the shader breaks it into lace).

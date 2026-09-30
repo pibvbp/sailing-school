@@ -89,8 +89,9 @@ SOFTWARE.
 
 The ocean height sampler (`src/render/env/ocean/sampler.ts`, `shaders/probe.glsl.ts`: surface height
 grid rendered from the ocean shader, read back asynchronously, bilinear lookup, two-level grid) and the
-Kelvin wake ribbon (`src/render/env/ocean/wake.ts`, `shaders/wake.glsl.ts`) are adapted from
-`src/game/WaveField.js`, `src/game/Wake.js` and `src/ocean/OceanSampleGLSL.js` of
+Kelvin wake ribbon (`src/render/env/ocean/wake.ts`, `shaders/wake.glsl.ts`), and the bow spray
+(`src/render/env/ocean/spray.ts`, `shaders/spray.glsl.ts`) are adapted from `src/game/WaveField.js`,
+`src/game/Wake.js` (its spray pool) and `src/ocean/OceanSampleGLSL.js` of
 https://github.com/developmentation/wave-riders (a fork of ABYSSAL).
 
 ```
