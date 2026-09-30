@@ -42,6 +42,9 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
   { key: 'tiller', term: 'Tiller', def: 'The stick that turns the rudder — push it one way and the bow turns the other way.' },
   { key: 'rudder', term: 'Rudder', def: 'The underwater blade at the stern that steers the boat when water flows past it.' },
   { key: 'keel', term: 'Keel', def: 'The heavy fin under the boat that stops it sliding sideways and keeps it upright.' },
+  { key: 'hull', term: 'Hull', def: 'The body of the boat — the part that floats.' },
+  { key: 'cockpit', term: 'Cockpit', def: 'The sunken space near the stern where the crew sits and steers.' },
+  { key: 'windex', term: 'Windex', def: 'The wind arrow at the masthead; it points into the wind the boat feels, toward where it comes from.', aliases: ['wind indicator', 'masthead wind indicator'] },
 
   // Directions
   { key: 'windward', term: 'Windward', def: 'The side of the boat (or direction) the wind is coming from.' },
@@ -62,6 +65,12 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
   { key: 'round-up', term: 'Round-up', def: 'When an overpowered boat heels so far that the rudder loses grip and the boat spins up into the wind.', aliases: ['broach', 'rounding up'] },
   { key: 'wing-on-wing', term: 'Wing-on-wing', def: 'Sailing dead downwind with the mainsail out on one side and the jib poled out on the other.', aliases: ['goose-winged'] },
   { key: 'by-the-lee', term: 'By the lee', def: 'Sailing so deep that the wind comes over the same side the boom is on — one step from an accidental gybe.' },
+  { key: 'head-to-wind', term: 'Head to wind', def: 'Pointing straight into the wind, where the sails flap and cannot drive the boat.' },
+  { key: 'sternway', term: 'Sternway', def: 'Moving backwards through the water — the rudder then steers the opposite way.' },
+  { key: 'pinching', term: 'Pinching', def: 'Sailing so close to the wind that the sails start to luff and the boat slows down.', aliases: ['pinch'] },
+  { key: 'feathering', term: 'Feathering', def: 'Steering a touch closer to the wind in a gust so the sails spill a little power and the boat heels less.' },
+  { key: 'hoist', term: 'Hoist', def: 'To pull a sail up the mast with its halyard.', aliases: ['hoisting'] },
+  { key: 'douse', term: 'Douse', def: 'To take a sail down quickly — usually the spinnaker, gathered in behind the mainsail.', aliases: ['dousing'] },
 
   // Points of sail
   { key: 'points-of-sail', term: 'Points of sail', def: 'The names for the boat\'s angle to the wind: close-hauled, close reach, beam reach, broad reach and run.', aliases: ['point of sail'] },
@@ -79,6 +88,8 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
   { key: 'lull', term: 'Lull', def: 'A patch of lighter wind between gusts.', aliases: ['lulls'] },
   { key: 'lift-shift', term: 'Lift (wind shift)', def: 'A wind shift that lets you point closer to where you want to go upwind.' },
   { key: 'header', term: 'Header', def: 'A wind shift that forces you to bear away from where you want to go upwind.', aliases: ['knock', 'headers'] },
+  { key: 'boat-wind', term: 'Boat wind', def: 'The headwind made by the boat\'s own motion, as strong as its speed — you would feel it even in a calm.', aliases: ['motion wind', 'induced wind'] },
+  { key: 'wind-gradient', term: 'Wind gradient', def: 'The wind blows more slowly near the water than higher up, because the surface drags on it.', aliases: ['gradient'] },
 
   // How sails work
   { key: 'angle-of-attack', term: 'Angle of attack', def: 'The angle between the sail and the apparent wind meeting it — too small and it luffs, too big and it stalls.', aliases: ['aoa'] },
@@ -89,14 +100,25 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
   { key: 'twist', term: 'Twist', def: 'How much further out the top of a sail sits than the bottom, matching the wind that is stronger and freer aloft.' },
   { key: 'camber', term: 'Camber', def: 'How deep (curved) a sail is: deep sails give power, flat sails less heel.', aliases: ['depth', 'draft depth'] },
   { key: 'draft', term: 'Draft', def: 'Where along the sail its deepest point sits (forward or back).', aliases: ['draft position'] },
+  { key: 'draft-stripes', term: 'Draft stripes', def: 'Dark lines printed across a sail so its depth and twist can be judged from below.', aliases: ['draft stripe'] },
   { key: 'backwinding', term: 'Backwinding', def: 'Air deflected by an over-trimmed jib hits the back of the mainsail near the mast and makes it bubble.', aliases: ['backwinded', 'backwind'] },
   { key: 'blanketing', term: 'Blanketing', def: 'One sail stealing another\'s wind by sitting in its wind shadow, as the main does to the jib on a run.', aliases: ['blanketed', 'wind shadow'] },
   { key: 'trim', term: 'Trim', def: 'To pull a sail in with its sheet; also the general word for how the sails are set.', aliases: ['trimming'] },
   { key: 'ease', term: 'Ease', def: 'To let a sheet out so the sail moves further from the boat.', aliases: ['easing'] },
+  { key: 'drive', term: 'Drive', def: 'The part of the sails\' total force that points forward along the boat and pushes it ahead.', aliases: ['driving force'] },
+  { key: 'heeling-force', term: 'Heeling force', def: 'The part of the sails\' total force that points across the boat, heeling it and pushing it to leeward.', aliases: ['side force'] },
+  { key: 'centre-of-effort', term: 'Centre of effort', def: 'The point on the sails where their total force can be thought to act.', aliases: ['center of effort'] },
+  { key: 'upwash', term: 'Upwash', def: 'Air bending toward a lifting sail before it arrives — the main\'s upwash lets the jib meet the wind from further aft.' },
+  { key: 'downwash', term: 'Downwash', def: 'Air turned by a sail as it leaves the leech — the jib\'s downwash makes the main meet the wind from further forward.' },
+  { key: 'slot', term: 'Slot', def: 'The gap between the jib\'s leech and the mainsail, where the two sails\' airflows meet.' },
+  { key: 'luff-curl', term: 'Luff curl', def: 'The fold that rolls in along a spinnaker\'s luff when it is eased right to the edge — the sign of the fastest trim.', aliases: ['curl', 'curling'] },
+  { key: 'depower', term: 'Depower', def: 'To reduce the sails\' force, and with it heel, by flattening, twisting or easing them.', aliases: ['depowering'] },
 
   // Boat behaviour
   { key: 'heel', term: 'Heel', def: 'The sideways lean of the boat caused by the wind pushing on the sails.', aliases: ['heeling'] },
   { key: 'hiking', term: 'Hiking', def: 'The crew sitting out on the high (windward) side so their weight holds the boat more upright.', aliases: ['hike'] },
+  { key: 'heeling-moment', term: 'Heeling moment', def: 'The tipping effort of the sails\' side force high up against the keel\'s opposing force low down.' },
+  { key: 'righting-moment', term: 'Righting moment', def: 'The effort of the boat\'s weight and buoyancy, plus the crew\'s weight, that pulls a heeled boat back upright.', aliases: ['righting couple'] },
   { key: 'leeway', term: 'Leeway', def: 'The sideways slip of the boat through the water — the angle between where it points and where it actually goes.' },
   { key: 'weather-helm', term: 'Weather helm', def: 'The boat\'s urge to turn toward the wind, so you have to hold the tiller to windward to go straight.' },
   { key: 'vmg', term: 'VMG', def: 'Velocity made good: how fast you are really getting upwind (or downwind), not just how fast the boat moves.', aliases: ['velocity made good'] },
