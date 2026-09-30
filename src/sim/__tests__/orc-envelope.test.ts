@@ -100,7 +100,9 @@ describe('ORC coefficient envelopes (optimal trim)', () => {
   it('main + jib drag on a dead run', () => {
     const air = airFor(180);
     const m = main.evaluate(c, 78 * DEG, 10 * DEG, air, { main: 0, mainLuff: 0 });
-    const j = jib.evaluate(c, 40 * DEG, 0, air, 0);
+    // Dead-run trim for the jib: poled out square to the wind on the whisker (ORC's 180° headsail coefficient). An
+    // eased jib is only ~40° to a following wind and, with reversed flow modelled as a flat plate (I1), is no drag sail.
+    const j = jib.evaluate(c, -80 * DEG, 0, air, 0);
     const f = { x: m.sum.force.x + j.sum.force.x, y: m.sum.force.y + j.sum.force.y };
     const cd = dragOf(f, Math.PI) / (Q * (m.sum.area + j.sum.area));
     rows.push(`up 180° CD: model ${cd.toFixed(3)} vs ORC ${orcUpCd(180).toFixed(3)}`);

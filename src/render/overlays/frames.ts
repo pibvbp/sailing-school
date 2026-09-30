@@ -4,7 +4,7 @@
 //   body (sim):  x forward, y starboard, z down      boat-local (three): X stbd, Y up, Z aft
 //   world:       three.js, Y up, North = −Z, East = +X; sim (e, n) → (X = e, Z = −n)
 import * as THREE from 'three';
-import { gradientFactor } from '../../sim/wind';
+import { gradientFactor, puffInfluence } from '../../sim/wind';
 import type { Puff, SimSnapshot } from '../../sim/types';
 
 /** The boat root's world transform, for converting body-frame points and vectors to world space. */
@@ -156,21 +156,6 @@ export class TrueWindField {
   }
 
   private influence(e: number, n: number, dir: number, out: { gain: number; turn: number }): void {
-    const upE = Math.sin(dir), upN = Math.cos(dir);
-    const crossE = Math.cos(dir), crossN = -Math.sin(dir);
-    let gain = 0, turn = 0;
-    for (let i = 0; i < this.puffs.length; i++) {
-      const p = this.puffs[i]!;
-      const de = e - p.e, dn = n - p.n;
-      const along = (de * upE + dn * upN) / p.radiusAlong;
-      const across = (de * crossE + dn * crossN) / p.radiusAcross;
-      const d2 = along * along + across * across;
-      if (d2 > 9) continue;
-      const w = p.envelope * Math.exp(-d2);
-      gain += p.strength * w;
-      turn += p.dirOffset * w;
-    }
-    out.gain = gain;
-    out.turn = turn;
+    puffInfluence(this.puffs, e, n, dir, out);
   }
 }

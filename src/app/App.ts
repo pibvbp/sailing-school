@@ -135,6 +135,8 @@ export class App implements AppApi {
     this.land = new Land(this.scene, this.sky);
     this.marks = new Marks(this.scene);
     this.ocean = new Ocean(this.renderer, this.scene, this.sky, this.quality);
+    // Only the main view gets the planar reflection (the telltale cam would render it a second time).
+    this.ocean.reflectFor = this.camera;
 
     this.boatRoot.name = 'boatRoot';
     this.boatRoot.rotation.order = 'YXZ';
@@ -377,7 +379,9 @@ export class App implements AppApi {
   }
 
   private readonly frame = (now: number): void => {
-    const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
+    // The governor sees the raw frame time (it ignores hidden-tab gaps itself); the sim gets a clamped dt.
+    const rawMs = Math.max(0, now - this.last);
+    const dt = Math.min(0.1, rawMs / 1000);
     this.last = now;
     const t = now / 1000;
     this.renderer.info.reset();
@@ -441,7 +445,7 @@ export class App implements AppApi {
     this.post.render(dt);
     this.tcam.render(dt, this.hud.telltaleCamRect(), this.scene, this.jibTelltales, this.boatRoot, snap.wind.twa >= 0 ? 1 : -1, THREE.AgXToneMapping);
 
-    if (this.governor.sample(dt * 1000, now)) this.applyQuality(this.governor.settings);
+    if (this.governor.sample(rawMs, now)) this.applyQuality(this.governor.settings);
     this.frameMsAvg += (dt * 1000 - this.frameMsAvg) * 0.05;
     if (++this.frames === 5) window.__ready = true;
     if (this.frames % 30 === 0) {

@@ -48,6 +48,7 @@ export type ControlKey =
   | 'tiller' | 'helmMode' | 'helmTarget'
   | 'mainSheet' | 'traveler' | 'vang' | 'outhaul' | 'cunningham' | 'backstay'
   | 'jibSheet' | 'jibLead' | 'jibFurl' | 'jibBacked' | 'jibWhisker'
+  | 'boomPush'
   | 'spinHoist' | 'spinPole' | 'spinPoleHeight' | 'spinSheet'
   | 'crewHike'
   | 'autoTrim.main' | 'autoTrim.jib' | 'autoTrim.spinnaker'
@@ -57,6 +58,7 @@ export const CONTROL_KEYS: readonly ControlKey[] = [
   'tiller', 'helmMode', 'helmTarget',
   'mainSheet', 'traveler', 'vang', 'outhaul', 'cunningham', 'backstay',
   'jibSheet', 'jibLead', 'jibFurl', 'jibBacked', 'jibWhisker',
+  'boomPush',
   'spinHoist', 'spinPole', 'spinPoleHeight', 'spinSheet',
   'crewHike',
   'autoTrim.main', 'autoTrim.jib', 'autoTrim.spinnaker',
@@ -65,7 +67,7 @@ export const CONTROL_KEYS: readonly ControlKey[] = [
 
 export const CONTROL_GROUPS: Readonly<Record<string, readonly ControlKey[]>> = {
   helm: ['tiller', 'helmMode', 'helmTarget'],
-  main: ['mainSheet', 'traveler', 'vang', 'outhaul', 'cunningham', 'backstay', 'autoTrim.main'],
+  main: ['mainSheet', 'traveler', 'vang', 'outhaul', 'cunningham', 'backstay', 'boomPush', 'autoTrim.main'],
   mainShape: ['vang', 'outhaul', 'cunningham', 'backstay'],
   jib: ['jibSheet', 'jibLead', 'jibFurl', 'jibBacked', 'jibWhisker', 'autoTrim.jib'],
   spinnaker: ['spinHoist', 'spinPole', 'spinPoleHeight', 'spinSheet', 'autoTrim.spinnaker'],

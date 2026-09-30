@@ -12,6 +12,33 @@ export function gradientFactor(h: number): number {
   return Math.log(Math.max(h, 0.3) / Z0) / LN_REF;
 }
 
+/**
+ * Gust gain and direction offset (rad) of a puff field at world (e, n) for base wind direction `dir`
+ * (FROM). Overlapping puffs do not add up their shifts: the offset is their weighted mean once they
+ * overlap. Shared by the simulation and the overlays' reconstruction of the field, so they cannot drift.
+ */
+export function puffInfluence(puffs: readonly Puff[], e: number, n: number, dir: number,
+  out: { gain: number; turn: number }): { gain: number; turn: number } {
+  const upE = Math.sin(dir), upN = Math.cos(dir);
+  const crossE = Math.cos(dir), crossN = -Math.sin(dir);
+  let gain = 0, turn = 0, wsum = 0;
+  for (let i = 0; i < puffs.length; i++) {
+    const p = puffs[i]!;
+    const de = e - p.e, dn = n - p.n;
+    const along = (de * upE + dn * upN) / p.radiusAlong;
+    const across = (de * crossE + dn * crossN) / p.radiusAcross;
+    const d2 = along * along + across * across;
+    if (d2 > 9) continue;
+    const w = p.envelope * Math.exp(-d2);
+    gain += p.strength * w;
+    turn += p.dirOffset * w;
+    wsum += w;
+  }
+  out.gain = gain;
+  out.turn = turn / Math.max(1, wsum);
+  return out;
+}
+
 interface PuffState extends Puff {
   age: number;
   life: number;
@@ -28,6 +55,7 @@ export class WindField {
   readonly settings: WindSettings;
   /** Active puffs (gusts have strength > 0, lulls < 0). */
   readonly puffs: Puff[] = [];
+  private readonly influence = { gain: 0, turn: 0 };
   t = 0;
   private rand: () => number;
   private nextId = 1;
@@ -133,23 +161,10 @@ export class WindField {
   /** True wind at a world point (east, north) and height h: speed (m/s) and direction FROM (rad). */
   sample(e: number, n: number, h: number): { speed: number; dir: number } {
     const base = this.settings.tws * gradientFactor(h);
-    let dir = this.baseDirection();
+    const dir = this.baseDirection();
     if (this.puffs.length === 0) return { speed: base, dir };
-    const upE = Math.sin(dir), upN = Math.cos(dir);
-    const crossE = Math.cos(dir), crossN = -Math.sin(dir);
-    let gain = 0, turn = 0;
-    for (const p of this.puffs) {
-      const de = e - p.e, dn = n - p.n;
-      const along = (de * upE + dn * upN) / p.radiusAlong;
-      const across = (de * crossE + dn * crossN) / p.radiusAcross;
-      const d2 = along * along + across * across;
-      if (d2 > 9) continue;
-      const w = p.envelope * Math.exp(-d2);
-      gain += p.strength * w;
-      turn += p.dirOffset * w;
-    }
-    dir += turn;
-    return { speed: base * Math.max(0.2, 1 + gain), dir };
+    const { gain, turn } = puffInfluence(this.puffs, e, n, dir, this.influence);
+    return { speed: base * Math.max(0.2, 1 + gain), dir: dir + turn };
   }
 
   /** Air velocity (toward) at a world point and height, world (east, north) components. */

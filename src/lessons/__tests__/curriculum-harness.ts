@@ -21,13 +21,10 @@ export const SPEC_ORDER = [
 ];
 
 /**
- * Lessons whose "Show me" run is blocked only by a known sim defect from the lead's 2026-09-29 review
- * (a fix round is landing separately). Re-enable each one when its fix is in main.
+ * Lessons whose "Show me" run is blocked only by a known sim defect (lesson id → finding id); their playthroughs
+ * are skipped until the fix is in. Empty since the 2026-09-30 physics fix round (C1, lesson 14, is fixed).
  */
-export const PENDING_SIM_FIX: Readonly<Record<string, string>> = {
-  // C1: switching the whisker pole on while running yanks the jib across; the sim blows up to NaN within ~2 s.
-  running: 'C1',
-};
+export const PENDING_SIM_FIX: Readonly<Record<string, string>> = {};
 
 export const FRAME = 1 / 60;
 /** Idle stretches run at 30 Hz: the check still runs every frame, the sim still steps at 120 Hz. */

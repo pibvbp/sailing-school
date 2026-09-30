@@ -42,7 +42,7 @@ export const running: Lesson = {
     step({
       title: 'Running',
       body: `<p>You are on a very broad reach, the wind almost behind you; a little further and you would be on a [[run]]. Down here the sails no longer work as wings: the air hits them and they are pushed along, like a parachute. The boat also runs away from her own wind, so the apparent wind is light and the ride feels calm.</p>
-<p>Look at the jib. It hangs half-limp in the mainsail's wind shadow — the main is [[blanketing]] it — and dead downwind it would collapse completely, so almost half of your sail area does very little. The flow streaks show the slow, stirred-up air behind the main.</p>`,
+<p>Look at the jib. It already sits partly in the mainsail's wind shadow — the main is [[blanketing]] it — and dead downwind it would get less than a third of the wind, so almost half of your sail area would do very little. The flow streaks show the slow, stirred-up air behind the main.</p>`,
       camera: 'chase',
       overlays: view('flow'),
       controls: ['helm'],

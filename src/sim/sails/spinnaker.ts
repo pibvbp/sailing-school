@@ -9,7 +9,10 @@ import { BOAT } from '../../shared/boatSpec';
 import { DEG, clamp, lerp, smoothstep, wrapPi, type Vec3 } from '../../shared/math';
 import type { Controls, SpinnakerState } from '../types';
 import { SPIN_AERO } from '../aero';
-import { evaluateSection, sumSections, flowAt, type AirContext, type SailSum, type SectionGeom, type SectionResult } from './common';
+import {
+  SHEET_EASE_RATE, SHEET_HAUL_RATE, approachRate, evaluateSection, flowAt, sideFromAwa, sumSections,
+  type AirContext, type SailSum, type SectionGeom, type SectionResult, type Side,
+} from './common';
 
 const S = BOAT.spinnaker;
 const N_SECTIONS = 6;
@@ -34,6 +37,8 @@ export interface SpinTrim {
   psiSheet: number;
   /** Chord angle the sail can physically reach (leech length, clew aft of the tack). */
   psiMin: number;
+  /** Largest chord angle the leech length allows (the clew cannot get further from the head). */
+  psiMax?: number;
   /** Chord angle actually flown (drives the forces). */
   psiChord: number;
   /** Trim angle relative to the flow at the luff: below the curl angle the luff curls, then collapses. */
@@ -53,12 +58,21 @@ export class SpinnakerModel {
   psi = 100 * DEG;
   /** Latest trim angle relative to the flow (rad). */
   alphaTrim = 0.3;
+  /** Sheet actually hauled (0…1): it follows `Controls.spinSheet` at rope-handling speed. */
+  sheet = 0.5;
   events: Array<'spinCollapse' | 'spinRefill'> = [];
   last: SpinEvaluation | null = null;
   private poleT = 0;
   private lowT = 0;
   private highT = 0;
   private collapseTarget = 0;
+  private primed = false;
+
+  /** Put the sheet where the controls say, at once (scenario start). */
+  syncControls(c: Controls): void {
+    this.sheet = clamp(c.spinSheet, 0, 1);
+    this.primed = true;
+  }
 
   poleAngle(c: Controls): number { return clamp(c.spinPole, 0, 1) * 90 * DEG; }
   poleTipH(c: Controls): number { return lerp(S.poleTipH[0], S.poleTipH[1], clamp(c.spinPoleHeight, 0, 1)); }
@@ -97,24 +111,47 @@ export class SpinnakerModel {
 
   /** Smallest chord angle the leech length allows (clew within SL of the head). */
   leechLimitedPsi(tack: Vec3): number {
+    return this.leechRange(tack).lo;
+  }
+
+  /**
+   * Chord angles the leech length allows (the clew within SL of the head), ψ ∈ [lo, hi]. The distance from the
+   * head is a sinusoid in ψ, so the reachable set is one interval around the angle that brings the clew closest:
+   * find that angle, then bisect out toward 0 and toward π. (With the pole squared the interval sits inside
+   * (0, π) — both ends matter.) If no angle is reachable, the closest one is returned for both ends.
+   */
+  leechRange(tack: Vec3): { lo: number; hi: number } {
     const reach2 = (S.SL * 0.98) ** 2 - (HEAD.z - tack.z) ** 2;
     const dist2 = (psi: number) => {
       const d = this.chordAt(psi);
       return (tack.x + S.foot * d.x - HEAD.x) ** 2 + (tack.y + S.foot * d.y - HEAD.y) ** 2;
     };
-    if (dist2(0) <= reach2) return 0;
-    if (dist2(Math.PI) > reach2) return Math.PI;
-    let lo = 0, hi = Math.PI;
-    for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (dist2(mid) > reach2) lo = mid; else hi = mid; }
-    return hi;
+    // dist² = C + 2·foot·(a·cos ψ + b·sin ψ): its minimum over the circle is at ψ = atan2(b, a) + π.
+    const a = tack.x - HEAD.x;
+    const b = -this.windwardSide * (tack.y - HEAD.y);
+    const m = wrapPi(Math.atan2(b, a) + Math.PI);
+    // If the minimum lies on the other half of the circle, the closest end of [0, π] is the best reachable.
+    const best = m >= 0 ? m : m > -Math.PI / 2 ? 0 : Math.PI;
+    if (dist2(best) > reach2) return { lo: best, hi: best };
+    const edge = (inside: number, outside: number): number => {
+      if (dist2(outside) <= reach2) return outside;
+      for (let i = 0; i < 24; i++) {
+        const mid = (inside + outside) / 2;
+        if (dist2(mid) > reach2) outside = mid; else inside = mid;
+      }
+      return inside;
+    };
+    return { lo: edge(best, 0), hi: edge(best, Math.PI) };
   }
 
   trim(c: Controls, flowPsi: number): SpinTrim {
     const tack = this.poleTip(c);
     const psiSheet = this.sheetLimitedPsi(c, tack);
-    const psiMin = Math.max(PSI_MIN, this.leechLimitedPsi(tack));
-    const psiChord = Math.max(psiSheet, psiMin, flowPsi);
-    return { psiSheet, psiMin, psiChord, alphaTrim: wrapPi(psiSheet - flowPsi) };
+    const leech = this.leechRange(tack);
+    const psiMin = Math.max(PSI_MIN, leech.lo);
+    const psiMax = Math.max(psiMin, leech.hi);
+    const psiChord = Math.min(Math.max(psiSheet, psiMin, flowPsi), psiMax);
+    return { psiSheet, psiMin, psiMax, psiChord, alphaTrim: wrapPi(psiSheet - flowPsi) };
   }
 
   geometry(c: Controls, psi: number, tack: Vec3): SectionGeom[] {
@@ -152,7 +189,9 @@ export class SpinnakerModel {
   evaluate(c: Controls, psi: number, air: AirContext, blanket: number, awaAbs: number, aws: number, hoist = this.hoist, collapsed = this.collapsed): SpinEvaluation {
     const tack = this.poleTip(c);
     const geom = this.geometry(c, psi, tack);
-    const reach = 0.55 + 0.45 * smoothstep(35 * DEG, 75 * DEG, awaAbs);
+    // Lifting efficiency against AWA (ORC spinnaker table): it builds to a peak on a close reach (67–75°) and, as the
+    // pole goes back and the sail turns into a drag device, falls about 10 % by 100–110°.
+    const reach = 0.55 + 0.45 * smoothstep(35 * DEG, 75 * DEG, awaAbs) - 0.1 * smoothstep(75 * DEG, 110 * DEG, awaAbs);
     const hNat = clamp(2.0 + 0.08 * aws, 2.0, 3.0);
     const poleEff = 1 - 0.35 * ((-tack.z - hNat) / 1.8) ** 2;
     const fill = smoothstep(0.6, 0.9, hoist);
@@ -178,15 +217,22 @@ export class SpinnakerModel {
     };
   }
 
-  step(dt: number, c: Controls, air: AirContext, blanket: number, awaRef: number, aws: number): SpinEvaluation {
+  /**
+   * Advance one step. `side` is the rig side decided by the simulation (hysteresis, gybes); without it the model
+   * keeps its own from `awaRef` with the same hysteresis.
+   */
+  step(dt: number, c: Controls, air: AirContext, blanket: number, awaRef: number, aws: number, side?: Side): SpinEvaluation {
     this.events.length = 0;
     // Hoist / douse.
     this.hoist = clamp(this.hoist + (c.spinHoist ? dt / HOIST_S : -dt / DOUSE_S), 0, 1);
+    if (!this.primed) this.syncControls(c);
+    this.sheet = approachRate(this.sheet, clamp(c.spinSheet, 0, 1), SHEET_HAUL_RATE, SHEET_EASE_RATE, dt);
+    const ca = this.sheet === c.spinSheet ? c : { ...c, spinSheet: this.sheet };
 
-    // Gybe: the pole goes end-for-end to the new windward side.
-    const side = awaRef > 3 * DEG ? 1 : awaRef < -3 * DEG ? -1 : this.windwardSide;
-    if (side !== this.windwardSide) {
-      this.windwardSide = side as 1 | -1;
+    // Gybe: the pole goes end-for-end to the new windward side — only when the rig really changes side (C3).
+    const s = side ?? sideFromAwa(this.windwardSide, awaRef);
+    if (s !== this.windwardSide) {
+      this.windwardSide = s;
       if (this.hoist > 0.05) { this.poleOn = false; this.poleT = 0; }
     }
     if (!this.poleOn) { this.poleT += dt; if (this.poleT >= POLE_TRANSFER_S) this.poleOn = true; }
@@ -194,13 +240,13 @@ export class SpinnakerModel {
     // Where does the sheet let the clew sit, where can the sail physically go, and where does the wind
     // want it? Easing beyond the geometric limit unloads the luff (curl, then collapse) instead of turning
     // the sail further.
-    const tack = this.poleTip(c);
+    const tack = this.poleTip(ca);
     const centre = { x: (tack.x + HEAD.x) / 2, y: tack.y / 2, z: (tack.z + HEAD.z) / 2 };
-    const tr = this.trim(c, this.flowPsi(flowAt(centre, air).flow));
+    const tr = this.trim(ca, this.flowPsi(flowAt(centre, air).flow));
     this.psi += (tr.psiChord - this.psi) * Math.min(1, dt / 0.4);
     this.alphaTrim = tr.alphaTrim;
 
-    const ev = this.evaluate(c, this.psi, air, blanket, Math.abs(awaRef), aws);
+    const ev = this.evaluate(ca, this.psi, air, blanket, Math.abs(awaRef), aws);
     this.last = ev;
 
     // Curl → collapse → refill state machine (only meaningful once the sail is up).

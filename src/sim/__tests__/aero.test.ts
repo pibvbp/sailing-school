@@ -54,6 +54,44 @@ describe('sail coefficients', () => {
     });
   }
 
+  describe('reversed flow, α → 180° (I1)', () => {
+    for (const [name, p, camber] of sails) {
+      it(`${name}: edge-on to a following wind it luffs and carries almost no lift`, () => {
+        for (const c of [camber * 0.6, camber, camber * 1.4]) {
+          for (const draft of [0.38, 0.45, 0.52]) {
+            const k = sailCoefficients(p, 179 * DEG, c, draft);
+            expect(Math.abs(k.cl)).toBeLessThan(0.2);
+            expect(k.luffing).toBeGreaterThan(0.8);
+          }
+        }
+        const k180 = sailCoefficients(p, 180 * DEG, camber, 0.45);
+        expect(k180.cl).toBeCloseTo(0, 6);
+        expect(k180.cd).toBeCloseTo(p.cdFlog, 6);
+      });
+
+      it(`${name}: the normal force grows from zero like a flat plate's — no attached-lift hump`, () => {
+        // |cl| rises steadily as the incidence a′ = 180° − α opens, and stays far below the forward side's lift.
+        let prev = 0;
+        for (let a = 1; a <= 30; a += 1) {
+          const rev = Math.abs(sailCoefficients(p, (180 - a) * DEG, camber, 0.45).cl);
+          expect(rev).toBeGreaterThanOrEqual(prev - 1e-9);
+          prev = rev;
+          if (a <= 12) expect(rev).toBeLessThan(0.6 * sailCoefficients(p, a * DEG, camber, 0.45).cl + 1e-9);
+        }
+      });
+    }
+
+    it('meets the forward branch at 90° (fully separated, same normal force)', () => {
+      for (const [, p, camber] of sails) {
+        const a = sailCoefficients(p, 90 * DEG - 1e-6, camber, 0.45);
+        const b = sailCoefficients(p, 90 * DEG + 1e-6, camber, 0.45);
+        expect(Math.abs(a.cl - b.cl)).toBeLessThan(1e-4);
+        expect(Math.abs(a.cd - b.cd)).toBeLessThan(1e-4);
+        expect(b.stall).toBe(1);
+      }
+    });
+  });
+
   it('deeper sails make more lift at the same angle and have a wider groove', () => {
     const a = 8 * DEG;
     const flat = sailCoefficients(MAIN_AERO, a, 0.07, 0.45).cl;

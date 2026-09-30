@@ -1,6 +1,6 @@
 // Lesson 15 — Spinnaker: hoist and trim (spec §11.2): pole square to the apparent wind, ease to the curl.
 // Task: 30 s full and curling at TWA 120–150° — played the way a trimmer does it: ease until the luff curls,
-// trim a touch until it stops, again and again. The sim's curl appears over only ~0.03 of sheet travel.
+// trim a touch until it stops, again and again. The sim's curl appears over only ~0.04 of sheet travel.
 import type { SimSnapshot } from '../../sim/types';
 import type { Lesson, LessonCtx } from '../types';
 import {
@@ -12,8 +12,9 @@ const POLE_TOLERANCE = 10;
 
 /**
  * Playing the sheet on the edge: the luff curl averaged over CURL_WINDOW_S stays small but non-zero. Measured in
- * the sim: the crew's steady trim curls 0.01–0.16; a learner playing the sheet in fine steps (Shift) averages
- * 0.14–0.58; full-speed key presses average 0.63–0.87 — mostly deep curl, one step from a collapse.
+ * the sim (10 kn, TWA 125–135°, 2026-09-30 physics): the crew's steady trim curls 0.07–0.16; a learner easing
+ * until it curls and trimming until it stops averages 0.16 with Shift and 0.39–0.44 at full key speed; a sheet
+ * left 0.02 too far out averages 0.75–0.86 (deep curl), and 0.08 too far out collapses the kite.
  */
 const CURL_WINDOW_S = 10;
 const CURL_BAND: readonly [number, number] = [0.03, 0.6];

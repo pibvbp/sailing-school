@@ -112,13 +112,15 @@ export class GybeWatch {
 
 /**
  * Which tack the learner is deliberately steering the boat onto right now: +1 starboard tack (wind on the
- * starboard side), −1 port tack, 0 no clear input. It reads the helm as a sailor would: a tiller held over
- * (which works in reverse while the boat drifts astern), an autopilot set to a sailing angle, or a jib held
- * aback (it pushes the bow away from its own side).
+ * starboard side), −1 port tack, 0 no clear input. It reads the helm as a sailor would: the boom held out by
+ * hand (the backed main swings the bow toward it: boom to port, starboard tack), a jib held aback (it pushes
+ * the bow away from its own side), an autopilot set to a sailing angle, or a tiller held over (which works in
+ * reverse while the boat drifts astern).
  */
 export function steeringOnto(c: LessonCtx): 1 | -1 | 0 {
   const k = c.app.controls;
   const s = c.snap;
+  if (k.boomPush !== 0) return k.boomPush > 0 ? 1 : -1;
   if (k.jibBacked) return s.sails.jib.clewAngle > 0 ? -1 : s.sails.jib.clewAngle < 0 ? 1 : 0;
   if (k.helmMode === 'twa') return Math.abs(toDeg(k.helmTarget)) >= 40 ? (k.helmTarget > 0 ? 1 : -1) : 0;
   if (k.helmMode === 'manual' && Math.abs(k.tiller) >= 0.3) {
@@ -178,5 +180,39 @@ export function sailAway(absTargetTwa: number, opts: { releaseAt?: number } = {}
     // tiller command that normally turns the bow to port now helps it to starboard.
     const clewSide = Math.sign(s.sails.jib.clewAngle) || 1;
     k.tiller = s.boat.u < -0.05 ? -clewSide : 0;
+  };
+}
+
+/**
+ * Out of irons by backing the main, onto the tack of your choice. `side` is the tack: +1 starboard (boom pushed
+ * out to port), −1 port (boom to starboard). Ease the mainsheet, push the boom out, back the jib (the crew holds
+ * it on the windward side, opposite the boom, once the bow swings), steer in reverse while she goes astern; once
+ * the bow is `releaseAt`° off the wind on that tack, let go of both and sail away at `absTargetTwa`.
+ */
+export function backTheMain(side: 1 | -1, opts: { absTargetTwa?: number; releaseAt?: number } = {}): Demo {
+  const target = opts.absTargetTwa ?? 60;
+  const releaseAt = opts.releaseAt ?? 55;
+  let phase: 'back' | 'sail' = 'back';
+  return (c) => {
+    const s = c.snap;
+    const k = c.app.controls;
+    if (phase === 'back' && Math.sign(twaDeg(s)) === side && absTwa(s) >= releaseAt) phase = 'sail';
+    if (phase === 'sail') {
+      k.boomPush = 0;
+      k.jibBacked = false;
+      k.autoTrim.main = true;
+      k.autoTrim.jib = true;
+      holdTwa(c, target, side);
+      return;
+    }
+    k.autoTrim.main = false;
+    k.mainSheet = 0.1; // eased right out: the crew cannot push the boom past a tight sheet
+    k.boomPush = side; // + holds the boom out to port
+    k.jibBacked = true;
+    k.autoTrim.jib = false;
+    k.helmMode = 'manual';
+    // Going astern the rudder works in reverse: tiller + (bow to starboard going ahead) now swings the bow to
+    // port — toward a boom held out to port.
+    k.tiller = s.boat.u < -0.05 ? side : 0;
   };
 }

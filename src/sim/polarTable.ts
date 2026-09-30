@@ -9,9 +9,11 @@ export interface PolarTable {
   speed: number[][];
   /** Sail set used at each point. */
   sails: ('jib' | 'spinnaker')[][];
-  /** Best upwind / downwind VMG per wind speed. */
+  /** Best upwind / downwind VMG per wind speed (refined between grid angles with a parabola). */
   beat: PolarPoint[];
   run: PolarPoint[];
+  /** Grid points (TWS kn, TWA deg) whose steady run never settled on the angle: averaged values, use with care. */
+  unconverged?: Array<[number, number]>;
 }
 
 function bracket(xs: readonly number[], x: number): [number, number, number] {

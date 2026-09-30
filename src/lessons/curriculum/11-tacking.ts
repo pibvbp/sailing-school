@@ -1,10 +1,14 @@
 // Lesson 11 — Tacking (spec §11.2): the sequence and calls, keeping momentum. Task: three tacks keeping at
 // least 60 % of the entry speed.
 import type { Lesson, LessonCtx } from '../types';
-import { absTwa, fmt, frameDt, holdTwa, mem, polarSpeed, sailing, speedKn, step, TackWatch, twsKn, upKey, view, type TackResult } from './helpers';
+import { absTwa, fmt, holdTwa, mem, polarSpeed, sailing, speedKn, step, TackWatch, twsKn, upKey, view, type TackResult } from './helpers';
 
 const TACKS = 3;
 const KEEP = 0.6;
+/** Close-hauled for this lesson (deg TWA). A crew tack from here at full speed keeps 66–71 % of its speed in 12 kn. */
+const CLOSE_HAULED = 45;
+/** Above this (deg TWA) the boat is reaching: the turn is longer and a tack keeps too little (≈ 55 % from 53°). */
+const TOO_LOW = 50;
 
 interface TackLog { watch: TackWatch; good: number; last: TackResult | null }
 const log = (c: LessonCtx): TackLog => mem(c, 'tacks', () => ({ watch: new TackWatch(), good: 0, last: null }));
@@ -35,7 +39,7 @@ export const tacking: Lesson = {
     }),
     step({
       title: 'Three good tacks',
-      body: `<p>Tack three times, keeping at least ${KEEP * 100} % of your speed through each one. Press <kbd>T</kbd> and the crew tacks with you — or steer through the wind yourself with the tiller (the crew still handles the jib). Let the boat reach full speed again between tacks.</p>`,
+      body: `<p>Tack three times, keeping at least ${KEEP * 100} % of your speed through each one. Press <kbd>T</kbd> and the crew tacks with you — or steer through the wind yourself with the tiller (the crew still handles the jib). After each tack the boat sails a little low while she picks up speed: wait until she is back up to close-hauled and at full speed before the next one. From a reach the turn is longer, and you lose more.</p>`,
       camera: 'chase',
       overlays: view('track', 'wheel'),
       controls: ['helm', 'manoeuvres'],
@@ -59,28 +63,22 @@ export const tacking: Lesson = {
         if (l.last && l.last.ratio < KEEP) {
           return `That tack kept only ${fmt(l.last.ratio * 100, 0)} % of your speed (${fmt(l.last.entry)} → ${fmt(l.last.min)} kn). Build full speed first, then turn steadily.`;
         }
-        if (absTwa(s) > 60) return `Head up to close-hauled with ${upKey(s)} before you tack.`;
+        if (absTwa(s) > TOO_LOW) return `Head up to close-hauled (about ${CLOSE_HAULED}°) with ${upKey(s)} before you tack: from a reach the turn is longer and you lose more speed.`;
         const target = polarSpeed(twsKn(s), absTwa(s));
-        if (speedKn(s) < 0.85 * target) return `Wait for full speed (about ${fmt(target)} kn) before the next tack.`;
+        if (speedKn(s) < 0.9 * target) return `Wait for full speed (about ${fmt(target)} kn) before the next tack.`;
         return `Ready about: press T. Tacks so far: ${l.good} of ${TACKS}.`;
       },
       showMe: (c) => {
         Object.assign(c.app.controls.autoTrim, { main: true, jib: true });
-        holdTwa(c, 45);
-        let wait = 0;
-        // Tack whenever the boat is settled close-hauled at speed.
+        holdTwa(c, CLOSE_HAULED);
+        // Tack only from close-hauled at full speed. After each tack the boat sails a little low while she picks up
+        // speed; tacking again from there turns further and loses more, so wait until she is back on the wind.
         return (cc) => {
           const s = cc.snap;
-          const dt = frameDt(cc, 'demoDt');
-          if (s.maneuver !== null) { wait = 0; return; }
-          wait += dt;
-          if (wait < 3) return;
-          const a = absTwa(s);
-          if (a > 55) { holdTwa(cc, 45); return; }
-          if (speedKn(s) >= 0.9 * polarSpeed(twsKn(s), a)) {
-            cc.app.controls.command = 'tack';
-            wait = 0;
-          }
+          if (s.maneuver !== null) return;
+          holdTwa(cc, CLOSE_HAULED);
+          const onTheWind = Math.abs(absTwa(s) - CLOSE_HAULED) < 2;
+          if (onTheWind && speedKn(s) >= 0.95 * polarSpeed(twsKn(s), CLOSE_HAULED)) cc.app.controls.command = 'tack';
         };
       },
     }),

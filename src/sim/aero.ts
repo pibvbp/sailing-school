@@ -6,6 +6,8 @@
 //   attached — Cl = CLα·(α − α0(camber)), Cd = cd0 + kpp·Cl²;
 //   stalled  — beyond α_stall the flow separates; the force becomes a normal force Cn(α) ⟂ chord,
 //              Cl = Cn·cos α, Cd = Cn·sin α + cd0 (the shape the ORC tables show at wide angles).
+// Beyond 90° the flow is reversed (it reaches the leech first) and the same blends are evaluated on the incidence
+// to the chord line a′ = π − α: see `reversedCoefficients`.
 // All blends are smoothsteps so every coefficient is continuous in α — important for stable dynamics.
 import { interpTable, smoothstep, DEG } from '../shared/math';
 
@@ -72,15 +74,16 @@ export function alphaStall(p: SailAeroParams, camber: number, draft: number): nu
   return p.stallBase + p.stallCamberGain * camber + 0.1 * (0.5 - draft);
 }
 
+/** Separated-flow normal force for forward flow, α ∈ [0, π/2]. */
 function normalForce(p: SailAeroParams, alpha: number): number {
-  const a = alpha <= Math.PI / 2 ? alpha : Math.PI - alpha;
-  if (a <= p.cnPeakAlpha) return p.cnMax;
-  const x = (a - p.cnPeakAlpha) / p.cnDecay;
+  if (alpha <= p.cnPeakAlpha) return p.cnMax;
+  const x = (alpha - p.cnPeakAlpha) / p.cnDecay;
   return p.cn90 + (p.cnMax - p.cn90) * Math.exp(-Math.pow(x, 1.5));
 }
 
 /** Section coefficients for an angle of attack α ∈ [0, π] measured between chord and flow. */
 export function sailCoefficients(p: SailAeroParams, alpha: number, camber: number, draft: number): Coeffs {
+  if (alpha > Math.PI / 2) return reversedCoefficients(p, Math.min(alpha, Math.PI), camber, draft);
   const aLuff = alphaLuff(p, camber, draft);
   const aStall = alphaStall(p, camber, draft);
   const full = smoothstep(aLuff - p.luffWidth, aLuff, alpha);       // 0 flogging … 1 powered
@@ -95,6 +98,28 @@ export function sailCoefficients(p: SailAeroParams, alpha: number, camber: numbe
   const cl = full * ((1 - sep) * clAtt + sep * clSep);
   const cd = full * ((1 - sep) * cdAtt + sep * cdSep) + (1 - full) * p.cdFlog;
   return { cl, cd, luffing: 1 - full, stall: sep };
+}
+
+/**
+ * Reversed flow, α ∈ (π/2, π]: the air reaches the leech first. Every blend is evaluated on the incidence to the
+ * chord line a′ = π − α:
+ *  - luffing returns as a′ → 0 (a sail edge-on to a following wind flogs). Seen from the leech the draft sits at
+ *    1 − draft, so the luffing threshold is that of an aft-draft sail;
+ *  - the leech is a sharp leading edge, so there is no attached flow (the stall blend is 1 from a′ = 0) and no
+ *    attached-lift hump: the normal force grows from 0 like a separated flat plate's,
+ *    Cn = Cn(90°)·sin a′ / (0.56 + 0.44·sin a′) (Lindenburg's flat-plate fit).
+ * At α = 90° this meets the forward branch (fully separated, Cn(90°)), so the coefficients stay continuous.
+ * cl = Cn·cos α < 0 here: evaluateSection turns the lift direction round so the net force still points to the belly.
+ */
+function reversedCoefficients(p: SailAeroParams, alpha: number, camber: number, draft: number): Coeffs {
+  const a = Math.PI - alpha;
+  const aLuff = alphaLuff(p, camber, 1 - draft);
+  const full = smoothstep(aLuff - p.luffWidth, aLuff, a);
+  const s = Math.sin(a);
+  const cn = (normalForce(p, Math.PI / 2) * s) / (0.56 + 0.44 * s);
+  const cl = full * cn * Math.cos(alpha);
+  const cd = full * (cn * Math.sin(alpha) + p.cd0) + (1 - full) * p.cdFlog;
+  return { cl, cd, luffing: 1 - full, stall: 1 };
 }
 
 // ORC VPP 2023 Fig. 5.14: effective-span factor against apparent wind angle.

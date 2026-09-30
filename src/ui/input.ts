@@ -343,6 +343,13 @@ export class InputController {
           this.furlTarget = current > 0.5 ? 0 : 1;
         }
         break;
+      case 'b':
+        // Push the boom out by hand (backing the main, e.g. to get out of irons): off → to port → to starboard.
+        if (this.allowed('boomPush')) {
+          c.boomPush = c.boomPush === 0 ? 1 : c.boomPush > 0 ? -1 : 0;
+          this.commands.notify(c.boomPush === 0 ? 'Boom released' : `Pushing the boom out to ${c.boomPush > 0 ? 'port' : 'starboard'} — ease the mainsheet`);
+        }
+        break;
       case 'c': this.commands.cycleCamera(); break;
       case ' ': this.commands.togglePause(); break;
       case ',': case '<': this.commands.stepTimeScale(-1); break;

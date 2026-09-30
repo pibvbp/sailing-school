@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { CAMBER_PTS, SliceField, newSliceElement, sailCutAt, type FlowSample, type SliceElement } from '../flowField';
 import { bestMeanMs, sail } from './helpers';
+import { perfBudget } from '../../../testing/perf';
 
 const sample = (): FlowSample => ({ u: 0, v: 0, ratio: 0, turb: 0 });
 
@@ -147,7 +148,7 @@ describe('SliceField', () => {
     const msRun = bestMeanMs(() => f.update(run.snap, true), 10, 6);
     const g = new SliceField(4.5);
     const msBeat = bestMeanMs(() => g.update(beat.snap, true), 10, 6);
-    expect(msBeat).toBeLessThan(1.0);
-    expect(msRun).toBeLessThan(1.5);
+    expect(msBeat).toBeLessThan(perfBudget(1.0));
+    expect(msRun).toBeLessThan(perfBudget(1.5));
   });
 });

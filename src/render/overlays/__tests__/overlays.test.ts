@@ -12,6 +12,7 @@ import { DISPLAY_CAP, agxForward, agxInverse } from '../overlayMaterial';
 import { COLORS, linearColor } from '../palette';
 import { SECTORS, pointOfSail } from '../wheel';
 import { bestMeanMs, sail } from './helpers';
+import { perfBudget } from '../../../testing/perf';
 
 describe('points-of-sail wheel', () => {
   it('classifies true wind angles on either tack like the glossary', () => {
@@ -148,6 +149,6 @@ describe('Overlays', () => {
     for (let i = 0; i < 60; i++) ov.update(1 / 60, s, camera); // settle (forced builds, JIT)
     const ms = bestMeanMs(() => { sim.step(); sim.step(); ov.update(1 / 60, sim.snapshot(), camera); }, 30, 6);
     // Includes two sim steps and a snapshot per frame; the browser measurement is in the report.
-    expect(ms).toBeLessThan(2.5);
+    expect(ms).toBeLessThan(perfBudget(2.5));
   });
 });

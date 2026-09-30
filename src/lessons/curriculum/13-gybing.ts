@@ -13,7 +13,8 @@ export const gybing: Lesson = {
   module: 'Manoeuvres',
   title: 'Gybing',
   summary: 'Turn the stern through the wind under control — and see why an accidental gybe is dangerous.',
-  setup: (c) => c.app.scenario(sailing({ twsKn: 14, twa: 150 })),
+  // 10 kn: the accidental gybe still slams across (crash gybe; 40° out to 40° out in 1.1 s against the crew's 5.8 s).
+  setup: (c) => c.app.scenario(sailing({ twsKn: 10, twa: 150 })),
   steps: [
     step({
       title: 'The gybe',

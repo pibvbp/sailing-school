@@ -10,6 +10,7 @@
 // tests of the manoeuvre detectors, Show-me takeover, lessons 5, 16 and 18. The harness is curriculum-harness.ts.
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { Simulation } from '../../sim/simulation';
+import { AutoCrew } from '../../sim/autocrew';
 import type { Controls, ScenarioInit, SimSnapshot } from '../../sim/types';
 import { optimalVmg, type PolarTable } from '../../sim/polarTable';
 import polars from '../../sim/data/polars.json';
@@ -17,7 +18,7 @@ import { glossaryRefs } from '../glossary';
 import { CAMERA_KEYS, CONTROL_GROUPS, CONTROL_KEYS, OVERLAY_KEYS, type Lesson, type LessonCtx } from '../types';
 import { CURRICULUM } from '../curriculum';
 import { LAB_SCENARIO, inMaxDriveWindow } from '../curriculum/05-sail-is-a-wing';
-import { ENTRY_WINDOW, fromDeg, fromKn, sailing, step, TackWatch, TimeWindow, type TackResult } from '../curriculum/helpers';
+import { ENTRY_WINDOW, fromDeg, fromKn, sailing, step, TackWatch, TimeWindow, toDeg, toKn, type TackResult } from '../curriculum/helpers';
 import { MARK_DISTANCE, REACHED_M, TARGET_TIME, TWD } from '../curriculum/18-sailing-smart';
 import {
   IDLE_FRAME, LONG_IDLE_S, LONG_SHOW_ME_S, PENDING_SIM_FIX, SPEC_ORDER, gotoStep, playLesson, startLesson, stepKey,
@@ -386,5 +387,90 @@ describe('lesson 5: the "maximum drive" window really is the maximum', () => {
     expect(inWindow.length).toBeGreaterThan(0);
     for (const r of inWindow) expect(r.drive, `sheet ${r.sheet.toFixed(2)}`).toBeGreaterThanOrEqual(0.9 * best);
     expect(LAB_SCENARIO.towed?.speed).toBeCloseTo(fromKn(5));
+  }, 30_000);
+});
+
+describe('lesson 11: the 60 % bar is what a good tack keeps', () => {
+  it('a crew tack from close-hauled at full speed keeps more than 60 % of its speed', () => {
+    const sim = new Simulation(sailing({ twsKn: 12, twa: 45 }));
+    sim.crew = new AutoCrew();
+    const watch = new TackWatch();
+    let result: TackResult | null = null;
+    for (let f = 0; f < 90 * 60 && !result; f++) {
+      if (f === 40 * 60) sim.controls.command = 'tack'; // settled close-hauled at full speed by now
+      sim.step();
+      sim.step();
+      result = watch.update(sim.snapshot());
+    }
+    expect(result, 'the tack was detected').not.toBeNull();
+    expect(result!.entry).toBeGreaterThan(5.3);
+    expect(result!.ratio).toBeGreaterThan(0.6);
+  }, 30_000);
+});
+
+describe('lesson 12: backing the main', () => {
+  it('chooses the tack: boom pushed out to starboard, she sails away on port tack', () => {
+    const { app, panel, drive } = gotoStep('out-of-irons', 'Back the main');
+    let phase: 'push' | 'back' | 'sail' = 'push';
+    const done = drive.run(60, () => {
+      const s = app.sim.snapshot();
+      const k = app.controls;
+      if (phase === 'push') {
+        Object.assign(k, { mainSheet: 0.2, boomPush: -1, jibBacked: true, helmMode: 'manual' });
+        k.autoTrim.main = false;
+        phase = 'back';
+      }
+      if (phase === 'back') {
+        k.tiller = s.boat.u < -0.05 ? -1 : 0; // going astern, tiller − swings the bow to starboard: toward the boom
+        if (toDeg(s.wind.twa) < -50) {
+          Object.assign(k, { boomPush: 0, jibBacked: false, tiller: 0, helmMode: 'twa', helmTarget: fromDeg(-60) });
+          k.autoTrim.main = true;
+          phase = 'sail';
+        }
+      }
+      return panel.task?.done === true;
+    });
+    expect(done, 'sailed away on the chosen tack').not.toBeNull();
+    expect(app.sim.snapshot().wind.twa, 'port tack').toBeLessThan(0);
+  }, 30_000);
+
+  it('Show me gets her out within 35 s from wherever she has drifted, on the side she is falling toward', () => {
+    for (const idle of [0, 5, 10, 20]) {
+      const { app, panel, runner, drive } = gotoStep('out-of-irons', 'Back the main');
+      drive.run(idle);
+      const falling = Math.sign(app.sim.snapshot().wind.twa) || 1;
+      runner.showMe();
+      const t = drive.run(35, () => panel.task?.done === true);
+      expect(t, `Show me after ${idle} s of drifting`).not.toBeNull();
+      expect(Math.sign(app.sim.snapshot().wind.twa), `after ${idle} s: the tack she was falling toward`).toBe(falling);
+    }
+  }, 60_000);
+
+  it('does not count backing the jib alone: she is put back in irons', () => {
+    const { app, panel, drive } = gotoStep('out-of-irons', 'Back the main');
+    const first = app.controls;
+    app.controls.jibBacked = true;
+    let reset = false;
+    drive.run(40, () => { reset ||= app.controls !== first; return false; });
+    expect(reset, 'put back in irons').toBe(true);
+    expect(panel.task?.done).toBe(false);
+  }, 30_000);
+
+  it('"Sail away" needs her moving forward: going astern at 2 kn or more on a reach does not count', () => {
+    const { app, panel, drive } = gotoStep('out-of-irons', 'Sail away');
+    // Going astern on a close reach with the main backed (boom held out to windward): she keeps her sternway.
+    app.scenario(sailing({
+      twsKn: 10, twa: 60, speedKn: -3, helm: 'manual',
+      controls: { boomPush: -1, mainSheet: 0.1, autoTrim: { main: false, jib: true, spinnaker: false } },
+    }));
+    let asternFor = 0;
+    drive.run(8, () => {
+      const s = app.sim.snapshot();
+      const a = Math.abs(toDeg(s.wind.twa));
+      if (toKn(s.boat.u) <= -2 && a >= 40 && a <= 150 && !app.controls.jibBacked) asternFor += 1 / 60;
+      return false;
+    });
+    expect(asternFor, 'she held 2 kn astern on a reach, the jib drawing normally').toBeGreaterThan(4);
+    expect(panel.task?.done).toBe(false);
   }, 30_000);
 });

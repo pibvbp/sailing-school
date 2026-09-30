@@ -18,7 +18,7 @@ const progress = (c: LessonCtx): Progress => mem(c, 'legs', () => ({ leg: 0, hel
 /** 10 kn on a broad reach, spinnaker up and trimmed (the crew's steady trim), the crew flying it. */
 const CALM = sailing({
   twsKn: 10, twa: 125, spinnaker: true,
-  controls: { spinSheet: 0.69, spinPole: 0.03, autoTrim: autoTrim(true, true, true) },
+  controls: { spinSheet: 0.67, spinPole: 0.03, autoTrim: autoTrim(true, true, true) },
 });
 /** 20 kn, a reach, the spinnaker over-trimmed with the pole forward: she will broach. */
 const BROACH = sailing({

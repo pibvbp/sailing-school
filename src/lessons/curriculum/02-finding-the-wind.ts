@@ -2,7 +2,7 @@
 // the no-go zone.
 import type { Lesson } from '../types';
 import {
-  absTwa, downKey, fmt, holdTwa, manualHelm, mem, peek, sailAway, sailing, speedKn, steeringOnto, step, tackOf, trimOf, twaDeg, upKey, view,
+  absTwa, downKey, fmt, forwardKn, holdTwa, manualHelm, mem, peek, sailAway, sailing, speedKn, steeringOnto, step, tackOf, trimOf, twaDeg, upKey, view,
 } from './helpers';
 
 export const findingTheWind: Lesson = {
@@ -70,7 +70,7 @@ export const findingTheWind: Lesson = {
           if (onto > 0) chosen.stbd = true;
           if (onto < 0) chosen.port = true;
           const onChosenTack = tackOf(s) > 0 ? chosen.stbd : chosen.port;
-          return onChosenTack && absTwa(s) >= 50 && speedKn(s) >= 2.5
+          return onChosenTack && absTwa(s) >= 50 && forwardKn(s) >= 2.5
             && trimOf(s.sails.main).luffing <= 0.35 && trimOf(s.sails.jib).luffing <= 0.35;
         },
       },
@@ -81,7 +81,7 @@ export const findingTheWind: Lesson = {
         if (!chosen?.stbd && !chosen?.port) return 'Choose a side and steer while she still has way on: hold ← to swing the bow to port (the wind ends up on your starboard side) or → for the other side. Drifting backwards, the keys work the other way round.';
         if (a < 30 && speedKn(s) < 0.4) return 'You are stuck head to wind — [[in-irons]]. Switch on Back jib in the trim panel: the wind pushes the jib and swings the bow off. Lesson 12 covers this in detail.';
         if (a < 50) return `Keep turning away from the wind with ${downKey(s)} — the sails cannot fill inside the no-go zone.`;
-        if (speedKn(s) < 2.5) return 'Good angle. Hold your course while the boat picks up speed.';
+        if (forwardKn(s) < 2.5) return 'Good angle. Hold your course while the boat picks up speed.';
         return null;
       },
       showMe: () => sailAway(65),

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { WindField, gradientFactor } from '../wind';
+import { DEG } from '../../shared/math';
 
 const base = { tws: 6, twd: 0, gustiness: 0, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 };
 
@@ -62,6 +63,21 @@ describe('wind field', () => {
     }
     expect(max).toBeGreaterThan(0.1);
     expect(max).toBeLessThan(0.26);
+  });
+
+  it('overlapping puffs do not add up their shifts: the direction is their weighted mean (M2)', () => {
+    const w = new WindField(base);
+    const puff = (id: number, dirOffset: number) => ({ id, e: 0, n: 0, radiusAlong: 100, radiusAcross: 150, strength: 0.3, dirOffset, envelope: 1 });
+    w.puffs.push(puff(1, 14 * DEG), puff(2, 14 * DEG));
+    expect(w.sample(0, 0, 10).dir / DEG).toBeCloseTo(14, 6);
+    w.puffs.length = 0;
+    w.puffs.push(puff(1, 12 * DEG), puff(2, -4 * DEG));
+    expect(w.sample(0, 0, 10).dir / DEG).toBeCloseTo(4, 6);
+    // A lone puff seen off-centre still shifts the wind in proportion to its weight (Σw < 1).
+    w.puffs.length = 0;
+    w.puffs.push(puff(1, 10 * DEG));
+    const edge = w.sample(0, 100, 10).dir / DEG; // one along-radius away: weight e⁻¹
+    expect(edge).toBeCloseTo(10 * Math.exp(-1), 6);
   });
 
   it('setSettings changes speed immediately', () => {

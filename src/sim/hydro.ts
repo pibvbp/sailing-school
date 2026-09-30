@@ -2,11 +2,9 @@
 import { BOAT } from '../shared/boatSpec';
 import { DEG, interpTable, smoothstep, type Vec3 } from '../shared/math';
 import { bodyPoint } from '../shared/coords';
+import { G, NU_WATER, RHO_AIR, RHO_WATER } from './constants';
 
-export const RHO_WATER = 1025;
-export const NU_WATER = 1.19e-6;
-export const G = 9.81;
-const RHO_AIR = 1.225;
+export { G, NU_WATER, RHO_WATER };
 
 /** ORC VPP 2023 §6.1.1 friction line (form factor applied by the caller). */
 export function frictionCf(V: number): number {
@@ -131,8 +129,9 @@ export function crossFlow(v: number, r: number): { Y: number; N: number } {
 
 /** Point where hull, mast, rigging and crew windage acts (body frame). */
 export const WINDAGE_POINT: Vec3 = bodyPoint(0.3, 0, 2.5);
-const CDA_FRONT = 2.6;
-const CDA_SIDE = 5.0;
+/** Drag areas (Cd·A, m²) head-on and beam-on: the projected windage areas with Cd ≈ 1. */
+const CDA_FRONT = BOAT.hull.windageFront;
+const CDA_SIDE = BOAT.hull.windageSide;
 
 /** Windage force (body frame) from the air velocity relative to the boat (body frame). */
 export function windage(airB: Vec3): Vec3 {

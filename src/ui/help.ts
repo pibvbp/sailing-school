@@ -16,6 +16,7 @@ export const KEYMAP: readonly [keys: string[], action: string][] = [
   [['G'], 'Gybe'],
   [['H'], 'Hoist / douse the spinnaker'],
   [['F'], 'Furl / unfurl the jib'],
+  [['B'], 'Push the boom out by hand: to port / to starboard / release (backing the main)'],
   [['1', '2', '3', '4', '5'], 'Camera: chase, helm, top, sail view, free'],
   [['C'], 'Next camera'],
   [['V'], 'Force vectors'],

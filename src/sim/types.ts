@@ -23,6 +23,12 @@ export interface Controls {
   jibFurl: number;     // 0 fully out … 1 furled
   jibBacked: boolean;  // hold the clew to windward
   jibWhisker: boolean; // whisker pole: jib held out on the windward side
+  /**
+   * The crew holds the boom out by hand, −1…1 (boom-angle sign: + = out to PORT). The crew's target is
+   * β = boomPush · 70°, pushed with what one person can manage (≈ 300 N at the boom end); the mainsheet still limits
+   * how far out it can go. 0 = the crew lets go at once. Used to back the main when getting out of irons.
+   */
+  boomPush: number;
   spinHoist: boolean;  // requested state
   spinPole: number;    // 0 on the forestay … 1 squared back (90°)
   spinPoleHeight: number; // 0…1 (maps to BOAT.spinnaker.poleTipH)
@@ -86,10 +92,11 @@ export interface SailSection {
   /** Position of maximum depth, fraction of chord. */
   draft: number;
   /**
-   * Belly side factor s ∈ [−1, 1]: the cloth bellies toward s · (chordDir.y, −chordDir.x, 0).
-   * For the main and jib (chord pointing aft) this is simply −1 = belly to port, +1 = belly to starboard;
-   * it passes through 0 while the sail flips during a tack/gybe. For the spinnaker (chord across the
-   * boat on a run) use the vector form.
+   * Belly side s = ±1: the cloth bellies toward s · (chordDir.y, −chordDir.x, 0). For the main and jib (chord
+   * pointing aft) −1 = belly to port, +1 = belly to starboard. A section flips from one sign to the other in a single
+   * step when the wind crosses its chord line (α = 0 or 180°) — where it is luffing and carries no lift, so the force
+   * stays continuous; renderers should ease the cloth across. Only values interpolated between sections (e.g. by
+   * `sectionAt`) lie in between. For the spinnaker (chord across the boat on a run) use the vector form.
    */
   leewardY: number;
   /** Effective angle of attack (rad). */
@@ -235,6 +242,7 @@ export function defaultControls(): Controls {
     jibFurl: 0,
     jibBacked: false,
     jibWhisker: false,
+    boomPush: 0,
     spinHoist: false,
     spinPole: 0.5,
     spinPoleHeight: 0.5,

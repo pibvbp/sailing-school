@@ -27,6 +27,9 @@ import { PointsOfSailWheel } from './wheel';
 import { WindTriangle } from './windTriangle';
 import type { SliceField } from './flowField';
 
+/** Teaching overlays are drawn over the world, never mirrored in the sea (see PlanarReflection). */
+const noReflect = <T extends THREE.Object3D>(o: T): T => { o.userData['noReflect'] = true; return o; };
+
 type OwnKey = 'windTriangle' | 'forces' | 'wheel' | 'flow' | 'flowSlice' | 'labels' | 'laylines' | 'track';
 const OWN: readonly OwnKey[] = ['windTriangle', 'forces', 'wheel', 'flow', 'flowSlice', 'labels', 'laylines', 'track'];
 
@@ -68,7 +71,7 @@ export class Overlays {
     this.labels = new LabelLayer();
     this.arrows = new ArrowBatch(this.ctx, 48);
     this.forceLines = new LineBatch(this.ctx, 64, { renderOrder: 19, hiddenAlpha: 0.3 });
-    this.scene.add(this.arrows.group, this.forceLines.group);
+    this.scene.add(noReflect(this.arrows.group), noReflect(this.forceLines.group));
   }
 
   set(k: OverlayKey, on: boolean): void {
@@ -174,18 +177,18 @@ export class Overlays {
       case 'windTriangle': this.wind ??= new WindTriangle(this.arrows, this.labels); break;
       case 'forces': this.forces ??= new ForceOverlay(this.arrows, this.forceLines, this.labels); break;
       case 'wheel':
-        if (!this.wheel) { this.wheel = new PointsOfSailWheel(this.ctx, this.arrows, this.labels); this.scene.add(this.wheel.mesh); }
+        if (!this.wheel) { this.wheel = new PointsOfSailWheel(this.ctx, this.arrows, this.labels); this.scene.add(noReflect(this.wheel.mesh)); }
         break;
       case 'flow':
         if (!this.flow) {
           this.flow = new FlowParticles(this.ctx, this.q);
           this.windParticles = new WindParticles(this.ctx, this.q);
-          this.boatRoot.add(this.flow.trails.group);
-          this.scene.add(this.windParticles.trails.group);
+          this.boatRoot.add(noReflect(this.flow.trails.group));
+          this.scene.add(noReflect(this.windParticles.trails.group));
         }
         break;
       case 'flowSlice':
-        if (!this.slice) { this.slice = new FlowSlice(this.ctx, this.labels, this.sliceHeight); this.boatRoot.add(this.slice.group); }
+        if (!this.slice) { this.slice = new FlowSlice(this.ctx, this.labels, this.sliceHeight); this.boatRoot.add(noReflect(this.slice.group)); }
         break;
       case 'labels': this.parts ??= new PartLabels(this.labels); break;
       case 'laylines':
@@ -193,13 +196,13 @@ export class Overlays {
           this.laylineLines = new LineBatch(this.ctx, 64, { depthBiasK: 0.06, depthBiasC: 0.8, renderOrder: 8 });
           this.laylines = new Laylines(this.laylineLines, this.labels);
           this.laylines.setMarks(this.marks);
-          this.scene.add(this.laylineLines.group);
+          this.scene.add(noReflect(this.laylineLines.group));
         }
         break;
       case 'track':
         if (!this.trackLines) {
           this.trackLines = new LineBatch(this.ctx, 800, { depthBiasK: 0.06, depthBiasC: 0.8, renderOrder: 7 });
-          this.scene.add(this.trackLines.group);
+          this.scene.add(noReflect(this.trackLines.group));
         }
         break;
     }

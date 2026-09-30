@@ -4,9 +4,50 @@
 import type { SailSection, Telltale } from '../types';
 import { airVelocityBody, type Kinematics } from '../apparent';
 import { alphaLuff, alphaStall, sailCoefficients, type SailAeroParams } from '../aero';
-import { rotX, smoothstep, DEG, type Vec3 } from '../../shared/math';
+import { RHO_AIR } from '../constants';
+import { clamp, rotX, smoothstep, DEG, type Vec3 } from '../../shared/math';
 
-export const RHO_AIR = 1.225;
+export { RHO_AIR };
+
+/** The cloth-motion term in the section airflow is capped at this fraction of the airflow (see evaluateSection). */
+const CLOTH_MOTION_CAP = 0.5;
+
+/** Angles of attack live in [0, π]: an interaction shift must not push them past either end. */
+const clampAlpha = (a: number): number => (a < 0 ? 0 : a > Math.PI ? Math.PI : a);
+
+/** Side the rig is set on: +1 wind from starboard (boom and jib clew out to port), −1 wind from port. */
+export type Side = 1 | -1;
+
+/** Head to wind the rig changes side once the wind is more than 3° across the bow… */
+export const SIDE_BAND_UPWIND = 3 * DEG;
+/** …and dead downwind only once the wind is clearly (|AWA| < 165°) on the new side. */
+export const SIDE_BAND_DOWNWIND = 165 * DEG;
+
+/**
+ * Which side the rig sets on, with hysteresis at both ends of the wind circle. Head to wind there is a ±3° dead
+ * band. Dead downwind the wind wobbling across the stern must not move the sails: the new side needs |AWA| < 165°
+ * (the simulation also moves the rig across when the boom gybes or the crew gybes it).
+ */
+export function sideFromAwa(prev: Side, awa: number): Side {
+  const s: Side = awa >= 0 ? 1 : -1;
+  if (s === prev) return prev;
+  const a = Math.abs(awa);
+  if (a <= Math.PI / 2) return a > SIDE_BAND_UPWIND ? s : prev;
+  return a < SIDE_BAND_DOWNWIND ? s : prev;
+}
+
+/**
+ * First-order rope handling: a sheet (or car) moves toward its target, hauled in (value rising) no faster than
+ * `haul` and eased (value falling) no faster than `ease` (units per second).
+ */
+export function approachRate(x: number, target: number, haul: number, ease: number, dt: number): number {
+  const d = target - x;
+  return d >= 0 ? x + Math.min(d, haul * dt) : x + Math.max(d, -ease * dt);
+}
+
+/** Sheets are hauled at about 0.35 of their full range per second and eased at about 1 per second (M3). */
+export const SHEET_HAUL_RATE = 0.35;
+export const SHEET_EASE_RATE = 1.0;
 
 export interface AirContext {
   kin: Kinematics;
@@ -44,6 +85,21 @@ export interface SectionResult extends SailSection {
 export interface SectionOptions {
   /** Added to the geometric angle (upwash > 0, downwash < 0). */
   alphaShift?: number;
+  /**
+   * The belly side (`leewardY`, ±1) the interaction shifts refer to — the leeward side the sail is set to. With it
+   * the shifts are applied to the angle signed relative to that side, so a section the flow reaches from its lee
+   * side is pushed further into luffing instead of lifting to windward. Without it the shift is added to the
+   * unsigned angle (the original behaviour).
+   */
+  shiftSide?: number;
+  /**
+   * Extra shift on the front `luffFraction` of the chord (the main's luff sits in the jib's slot flow, which is
+   * about 1.3–1.4× stronger there than on average). That part of the chord works at the more negative angle and,
+   * when it drops below the luffing angle, is backwinded: it carries no lift and flogs, while the rest works.
+   */
+  luffShift?: number;
+  /** Fraction of the chord `luffShift` acts on (default 0.3). */
+  luffFraction?: number;
   /** Extra shift used only for the *visual* luffing value (backwinding near the main's luff). */
   visualShift?: number;
   /** Dynamic-pressure multiplier (blanketing, collapse). */
@@ -77,8 +133,16 @@ export function evaluateSection(g: SectionGeom, p: SailAeroParams, air: AirConte
   if (opt.rotationRate) {
     const axis = opt.rotationAxis ?? g.luff;
     const w0 = opt.rotationRate;
-    a.x += w0 * (cp.y - axis.y);   // subtract the cloth's own velocity ω × r = (−ω·dy, ω·dx)
-    a.y -= w0 * (cp.x - axis.x);
+    // Subtract the cloth's own velocity ω × r = (−ω·dy, ω·dx). The damping this gives is real, but it grows with
+    // the square of the swing rate, and once the cloth moves about as fast as the air the strip model no longer
+    // holds (and an explicit integrator goes unstable) — so the term is capped at half the section's airflow.
+    let mx = w0 * (cp.y - axis.y);
+    let my = -w0 * (cp.x - axis.x);
+    const m = Math.hypot(mx, my);
+    const cap = CLOTH_MOTION_CAP * Math.hypot(a.x, a.y);
+    if (m > cap) { const k = cap / m; mx *= k; my *= k; }
+    a.x += mx;
+    a.y += my;
   }
   const speed = Math.hypot(a.x, a.y);
   const w = speed > 1e-6 ? { x: a.x / speed, y: a.y / speed, z: 0 } : { x: -1, y: 0, z: 0 };
@@ -92,12 +156,42 @@ export function evaluateSection(g: SectionGeom, p: SailAeroParams, air: AirConte
   let ny = w.y - cw * c.y;
   const nl = Math.hypot(nx, ny);
   if (nl > 1e-9) { nx /= nl; ny /= nl; } else { nx = c.y; ny = -c.x; }
-  const bellySide = nx * c.y - ny * c.x >= 0 ? 1 : -1; // s: belly = s · (c.y, −c.x)
+  const flowBelly = nx * c.y - ny * c.x >= 0 ? 1 : -1; // s: belly = s · (c.y, −c.x)
 
   const shift = opt.alphaShift ?? 0;
-  const alpha = opt.alphaOverride ? opt.alphaOverride(alphaGeom, w, c) : Math.max(0, alphaGeom + shift);
-  const k = sailCoefficients(p, alpha, g.camber, g.draft);
-  const visual = opt.visualShift ? sailCoefficients(p, Math.max(0, alpha + opt.visualShift), g.camber, g.draft).luffing : k.luffing;
+  let bellySide = flowBelly;
+  let alpha: number;
+  let luffAlpha: number | null = null;
+  if (opt.alphaOverride) {
+    alpha = clampAlpha(opt.alphaOverride(alphaGeom, w, c));
+  } else if (opt.shiftSide !== undefined) {
+    // Shifts are referred to the leeward side the sail is set to: sign the angle relative to that side first.
+    const side = opt.shiftSide >= 0 ? 1 : -1;
+    const signed = (flowBelly === side ? alphaGeom : -alphaGeom) + shift;
+    bellySide = signed >= 0 ? side : -side;
+    alpha = Math.min(Math.PI, Math.abs(signed));
+    if (opt.luffShift) {
+      const s = signed + opt.luffShift;
+      luffAlpha = clampAlpha(bellySide === side ? s : -s);
+    }
+  } else {
+    alpha = clampAlpha(alphaGeom + shift);
+    if (opt.luffShift) luffAlpha = clampAlpha(alpha + opt.luffShift);
+  }
+  if (bellySide !== flowBelly) { nx = -nx; ny = -ny; }
+
+  // Backwinding (spec §7.3): the front of the chord sits in the jib's slot flow and works at a lower angle; below
+  // the luffing angle it is backed — no lift, flogging drag — while the rest of the section keeps working.
+  const k0 = sailCoefficients(p, alpha, g.camber, g.draft);
+  const f = luffAlpha === null ? 0 : clamp(opt.luffFraction ?? 0.3, 0, 1);
+  const kl = f > 0 ? sailCoefficients(p, luffAlpha!, g.camber, g.draft) : k0;
+  const k = {
+    cl: (1 - f) * k0.cl + f * kl.cl,
+    cd: (1 - f) * k0.cd + f * kl.cd,
+    luffing: Math.max(k0.luffing, kl.luffing),
+    stall: k0.stall,
+  };
+  const visual = opt.visualShift ? sailCoefficients(p, clampAlpha(alpha + opt.visualShift), g.camber, g.draft).luffing : k.luffing;
 
   // Lift ⟂ flow, toward the belly; beyond 90° the normal-force model has cl < 0, so flip to keep the
   // resulting force pushing the cloth along its normal.

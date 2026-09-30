@@ -259,6 +259,16 @@ describe('InputController: one-shot keys', () => {
     expect(app.controls.jibFurl).toBeCloseTo(1 - INPUT_RATES.furl, 5);
   });
 
+  it('B pushes the boom out to port, then to starboard, then lets go', () => {
+    expect(app.controls.boomPush).toBe(0);
+    down('b'); up('b');
+    expect(app.controls.boomPush).toBe(1);
+    down('b'); up('b');
+    expect(app.controls.boomPush).toBe(-1);
+    down('b'); up('b');
+    expect(app.controls.boomPush).toBe(0);
+  });
+
   it('key repeat does not re-fire one-shot actions', () => {
     down('h');
     down('h', { repeat: true });

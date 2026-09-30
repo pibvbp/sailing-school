@@ -207,6 +207,7 @@ export class TrimPanel {
   private readonly whisker: Toggle;
   private readonly hoist: Toggle;
   private readonly hike: Segmented<'auto' | 'manual'>;
+  private readonly boomPush: Segmented<'off' | 'port' | 'stbd'>;
   private readonly hikeSlider: Slider;
   private readonly mainTT = new TelltaleRow('Leech', 4, false);
   private readonly jibWindward = new TelltaleRow('Windward', 3, true);
@@ -273,12 +274,21 @@ export class TrimPanel {
       curl: curl.slot, collapse: collapse.slot, rudder: rudderRo.slot, leeway: leewayRo.slot, heel: heelRo.slot,
     };
 
+    // Pushing the boom out by hand backs the main (getting out of irons); the mainsheet must be eased for it.
+    this.boomPush = new Segmented('Push boom', [
+      { value: 'off', label: 'Boom free', short: 'Free', title: 'Nobody holds the boom' },
+      { value: 'port', label: 'Push to port', short: 'Port', title: 'A crew member pushes the boom out to port (ease the mainsheet)' },
+      { value: 'stbd', label: 'Push to stbd', short: 'Stbd', title: 'A crew member pushes the boom out to starboard (ease the mainsheet)' },
+    ], (v) => {
+      if (this.hooks.isLive('boomPush')) c().boomPush = v === 'port' ? 1 : v === 'stbd' ? -1 : 0;
+    }, 'sx-seg--fill');
     const main = new Section('Mainsail', this.auto.main.el, [
       this.bind('mainSheet', 'main', { label: 'Sheet', term: 'sheet', min: 0, max: 1, ends: ['eased', 'trimmed'], format: pct }),
       this.bind('traveler', 'main', { label: 'Traveler', term: 'traveler', min: -1, max: 1, bipolar: true, ends: ['to leeward', 'to windward'], format: (v) => (Math.abs(v) < 0.02 ? 'centre' : `${v > 0 ? 'W' : 'L'} ${pct(Math.abs(v))}`) }),
       h('div', 'sx-ro-row', [boom.el, twist.el, mainAoa.el]),
       this.mainGroove.el,
       this.mainTT.el,
+      this.boomPush.el,
       h('details', 'sx-shape', [
         h('summary', { text: 'Sail shape' }),
         this.bind('vang', 'main', { label: 'Vang', term: 'vang', min: 0, max: 1, ends: ['loose', 'hard'], format: pct }),
@@ -346,6 +356,7 @@ export class TrimPanel {
     this.auto.spinnaker.setEnabled(live('autoTrim.spinnaker'));
     this.backJib.setEnabled(live('jibBacked'));
     this.whisker.setEnabled(live('jibWhisker'));
+    this.boomPush.setEnabled(live('boomPush'));
     this.hoist.setEnabled(live('spinHoist'));
     this.hike.setEnabled(live('crewHike'));
     this.hikeSlider.setEnabled(live('crewHike'));
@@ -376,6 +387,7 @@ export class TrimPanel {
     this.auto.spinnaker.set(c.autoTrim.spinnaker);
     this.backJib.set(c.jibBacked);
     this.whisker.set(c.jibWhisker);
+    this.boomPush.set(c.boomPush > 0 ? 'port' : c.boomPush < 0 ? 'stbd' : 'off');
     this.hoist.set(c.spinHoist);
     const hikeAuto = c.crewHike === 'auto';
     this.hike.set(hikeAuto ? 'auto' : 'manual');

@@ -4,9 +4,9 @@
 // The race: a windward mark MARK_DISTANCE m dead upwind of the start, in gusty wind that swings ±10° over
 // about 90 s. The autopilot may hold the angle to the wind; the learner's job is to choose when to tack — on the
 // headers, and on the layline. One long tack sails past a mark dead upwind, so doing nothing never finishes.
-// Measured on this course (six wind seeds): tacking on 5° headers and on the layline finishes in 237–244 s,
-// one tack on the layline only in 236–247 s (usually slower), tacking on headers with no eye on the laylines
-// often never gets there; the target time is 313 s.
+// Measured on this course (six wind seeds, 2026-09-30 physics): tacking on 5° headers and on the layline
+// finishes in 238–255 s (faster in 5 of the 6), one tack on the layline only in 243–250 s, tacking on headers
+// with no eye on the laylines often never gets there; the target time is 313 s.
 import { fromDeg, fromKn, toDeg } from '../../shared/units';
 import type { SimSnapshot } from '../../sim/types';
 import type { Lesson, LessonCtx, MarkSpec } from '../types';

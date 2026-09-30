@@ -37,7 +37,8 @@ export class EventDetector {
   }
 
   update(s: EventInputs): void {
-    if (s.crashRate > 0) this.emit('crashGybe', s.t, { rate: s.crashRate });
+    // One gybe, one event (the swing and the slam of the same gybe arrive a moment apart).
+    if (s.crashRate > 0 && this.debounced('crashGybe', s.t, 3)) this.emit('crashGybe', s.t, { rate: s.crashRate });
     for (const e of s.spinEvents) this.emit(e, s.t);
 
     // In irons: pointing into the no-go zone with no way on.
@@ -49,9 +50,12 @@ export class EventDetector {
       if (Math.abs(s.twa) > 45 * DEG && s.speed > 0.8) this.ironsArmed = true;
     }
 
-    // Round-up: heavily heeled, rudder near its stop, still turning toward the wind.
-    const towardWind = s.yawRate * Math.sign(s.twa) > 0.12;
-    if (Math.abs(s.heel) > 35 * DEG && Math.abs(s.rudder) > 28 * DEG && towardWind && this.debounced('roundUp', s.t, 6)) {
+    // Round-up: heavily heeled, the bow swinging toward the wind (> 8°/s) although the rudder is not steering it
+    // there (< 5° of rudder toward the wind) — whether the helm is fighting it or the tiller is centred.
+    const windSide = Math.sign(s.twa) || 1;
+    const towardWind = s.yawRate * windSide > 8 * DEG;
+    const rudderToWind = s.rudder * windSide;
+    if (Math.abs(s.heel) > 25 * DEG && towardWind && rudderToWind < 5 * DEG && this.debounced('roundUp', s.t, 6)) {
       this.emit('roundUp', s.t);
     }
 

@@ -67,6 +67,7 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
   { key: 'by-the-lee', term: 'By the lee', def: 'Sailing so deep that the wind comes over the same side the boom is on — one step from an accidental gybe.' },
   { key: 'head-to-wind', term: 'Head to wind', def: 'Pointing straight into the wind, where the sails flap and cannot drive the boat.' },
   { key: 'sternway', term: 'Sternway', def: 'Moving backwards through the water — the rudder then steers the opposite way.' },
+  { key: 'backing', term: 'Backing a sail', def: 'Holding a sail out against the wind so it presses on the sail\'s back — it pushes the boat backwards and swings the bow round, the way out of irons.', aliases: ['backed', 'back the jib', 'back the main', 'backing the jib', 'backing the main'] },
   { key: 'pinching', term: 'Pinching', def: 'Sailing so close to the wind that the sails start to luff and the boat slows down.', aliases: ['pinch'] },
   { key: 'feathering', term: 'Feathering', def: 'Steering a touch closer to the wind in a gust so the sails spill a little power and the boat heels less.' },
   { key: 'hoist', term: 'Hoist', def: 'To pull a sail up the mast with its halyard.', aliases: ['hoisting'] },

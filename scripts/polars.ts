@@ -12,6 +12,7 @@ const speed: number[][] = [];
 const sails: ('jib' | 'spinnaker')[][] = [];
 const beat: PolarPoint[] = [];
 const run: PolarPoint[] = [];
+const unconverged: Array<[number, number]> = [];
 const t0 = Date.now();
 
 /** Refine an optimum with a parabola through the best sample and its neighbours. */
@@ -34,6 +35,8 @@ for (const tws of TWS) {
     const r = bestSpeed(tws * KN, twa * DEG);
     row.push(Number((r.speed / KN).toFixed(3)));
     rowSails.push(r.sails);
+    // bestSpeed already retried it for twice as long; what is left is flagged, not silently trusted (M7).
+    if (!r.converged) unconverged.push([tws, twa]);
   }
   speed.push(row);
   sails.push(rowSails);
@@ -48,6 +51,7 @@ for (const tws of TWS) {
   console.log(`TWS ${tws} kn: beat ${beat.at(-1)!.speed} kn @ ${beat.at(-1)!.twa}° (VMG ${beat.at(-1)!.vmg}) · run ${run.at(-1)!.speed} kn @ ${run.at(-1)!.twa}° (VMG ${run.at(-1)!.vmg}) · ${((Date.now() - t0) / 1000).toFixed(0)} s`);
 }
 
-const table: PolarTable = { tws: TWS, twa: TWA, speed, sails, beat, run };
+const table: PolarTable = { tws: TWS, twa: TWA, speed, sails, beat, run, ...(unconverged.length ? { unconverged } : {}) };
 writeFileSync(new URL('../src/sim/data/polars.json', import.meta.url), JSON.stringify(table, null, 1) + '\n');
+if (unconverged.length) console.warn(`did not settle on the angle (averaged, flagged in the table): ${unconverged.map(([s, a]) => `${s} kn/${a}°`).join(', ')}`);
 console.log('wrote src/sim/data/polars.json');

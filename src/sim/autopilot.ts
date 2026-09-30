@@ -18,17 +18,31 @@ export function helmError(mode: HelmMode, target: number, s: HelmInputs): number
   }
 }
 
-/** Stateless PD helm (used where no memory is available). */
-export function helmCommand(mode: HelmMode, target: number, s: HelmInputs): number {
-  const gain = clamp((2.6 / Math.max(s.speed, 0.8)) ** 2, 0.35, 5);
-  return clamp(gain * (1.1 * helmError(mode, target, s) - 1.6 * s.r), -MAX_RUDDER, MAX_RUDDER);
+/** Proportional/derivative gain: it scales with 1/V² because rudder force grows with V² (bounded). */
+const helmGain = (speed: number): number => clamp((2.6 / Math.max(speed, 0.8)) ** 2, 0.35, 5);
+const KI = 0.35;
+
+/** The steering law; `trim` is the integral's rudder angle (rad); rudder angle out (rad). */
+function steer(err: number, trim: number, s: HelmInputs): number {
+  return clamp(helmGain(s.speed) * (1.1 * err - 1.6 * s.r) + trim, -MAX_RUDDER, MAX_RUDDER);
 }
 
 /**
- * PID helmsman: the integral removes the steady error that weather or lee helm would otherwise leave.
- * Gains scale with 1/V² because rudder force grows with V².
+ * Stateless PD helm: the {@link Helmsman} law without the integral.
+ * @deprecated Unused by the simulation, which steers with a {@link Helmsman}; kept for API compatibility.
+ */
+export function helmCommand(mode: HelmMode, target: number, s: HelmInputs): number {
+  return steer(helmError(mode, target, s), 0, s);
+}
+
+/**
+ * PID helmsman: the integral removes the steady error that weather or lee helm would otherwise leave. It is kept
+ * as a rudder angle (up to the stops), so it has the same authority at any speed: kept as a raw error integral it
+ * was scaled by the 1/V² gain and, fast and over-pressed, could only trim a few degrees — the boat then settled
+ * well below the angle it was told to hold (M7).
  */
 export class Helmsman {
+  /** Rudder angle (rad) the integral holds. */
   private integral = 0;
   private lastMode: HelmMode = 'manual';
   private lastTarget = 0;
@@ -40,9 +54,8 @@ export class Helmsman {
     this.lastMode = mode;
     this.lastTarget = target;
     const err = helmError(mode, target, s);
-    const gain = clamp((2.6 / Math.max(s.speed, 0.8)) ** 2, 0.35, 5);
     // Integrate only near the target (avoid wind-up during big turns).
-    if (Math.abs(err) < 15 * DEG) this.integral = clamp(this.integral + err * dt, -0.6, 0.6);
-    return clamp(gain * (1.1 * err + 0.35 * this.integral - 1.6 * s.r), -MAX_RUDDER, MAX_RUDDER);
+    if (Math.abs(err) < 15 * DEG) this.integral = clamp(this.integral + KI * helmGain(s.speed) * err * dt, -MAX_RUDDER, MAX_RUDDER);
+    return steer(err, this.integral, s);
   }
 }

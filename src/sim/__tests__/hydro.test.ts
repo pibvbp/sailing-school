@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { frictionCf, hullResistance, foilForce, KEEL, RUDDER, crossFlow, windage, rightingMoment } from '../hydro';
+import { BOAT } from '../../shared/boatSpec';
 import { DEG } from '../../shared/math';
 
 describe('hull resistance', () => {
@@ -63,6 +64,11 @@ describe('cross-flow, windage, stability', () => {
   it('windage pushes the boat downwind', () => {
     expect(windage({ x: -5, y: 0, z: 0 }).x).toBeLessThan(0);   // head to wind: pushed aft
     expect(windage({ x: 0, y: -5, z: 0 }).y).toBeLessThan(0);   // wind from starboard: pushed to port
+  });
+  it('windage uses the projected areas in the boat spec (M6)', () => {
+    const q = 0.5 * 1.225 * 25;
+    expect(windage({ x: -5, y: 0, z: 0 }).x).toBeCloseTo(-q * BOAT.hull.windageFront, 9);
+    expect(windage({ x: 0, y: -5, z: 0 }).y).toBeCloseTo(-q * BOAT.hull.windageSide, 9);
   });
   it('righting moment opposes heel with the GZ curve', () => {
     const k = rightingMoment(20 * DEG);

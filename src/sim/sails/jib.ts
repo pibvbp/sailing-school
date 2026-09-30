@@ -2,12 +2,17 @@
 // The clew swings about the luff (forestay). Each jib sheet is a rope from the clew to its lead: a
 // trimmed sheet pins the clew near the sheeting angle from BOTH sides, an eased sheet lets it swing out
 // (and across). Normal crew work: when the bow passes through the wind the old sheet is released and the
-// new one hauled in over ~2.5 s (the jib flogs meanwhile). "Back the jib" keeps the old sheet made fast.
+// new one hauled in over ~2.5 s (the jib flogs meanwhile). "Back the jib": the crew holds the clew to windward
+// (−15°); a whisker pole holds it out on the windward side (wing-on-wing). Either way the clew is carried to its
+// new position at a finite speed — a held position never steps.
 import { BOAT } from '../../shared/boatSpec';
-import { DEG, clamp, lerp, rotZ, smoothstep, type Vec3 } from '../../shared/math';
+import { DEG, clamp, lerp, lerp3, rotZ, smoothstep, type Vec3 } from '../../shared/math';
 import type { Controls, JibState } from '../types';
 import { JIB_AERO } from '../aero';
-import { evaluateSection, luffTelltales, sumSections, type AirContext, type SailSum, type SectionGeom, type SectionResult } from './common';
+import {
+  SHEET_EASE_RATE, SHEET_HAUL_RATE, approachRate, evaluateSection, luffTelltales, sideFromAwa, sumSections,
+  type AirContext, type SailSum, type SectionGeom, type SectionResult, type Side,
+} from './common';
 
 const N_SECTIONS = 8;
 const J = BOAT.jib;
@@ -23,9 +28,17 @@ const AIR_DAMP = 8;
 const HAUL_S = 2.5;
 const OUT_MAX = 29 * DEG;
 const IN_MAX = 100 * DEG;
-const WHISKER_ANGLE = 70 * DEG;
-
-const lerp3 = (a: Vec3, b: Vec3, t: number): Vec3 => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), z: lerp(a.z, b.z, t) });
+/**
+ * A whisker pole holds the clew square to a following wind. At 80° the poled jib meets the ORC dead-run jib
+ * coefficients (Cd 0.93 vs 0.90, |Cl| < 0.1); at 70° it would still be a 20° wing (Cl ≈ 0.22).
+ */
+const WHISKER_ANGLE = 80 * DEG;
+/** Backed jib: the crew holds the clew this far to windward (spec §7.4). */
+const BACKED_ANGLE = 15 * DEG;
+/** Speed at which the crew (or the pole) carries a held clew to its new position: ≈ 2–3 s onto the pole. */
+const HOLD_RATE = 40 * DEG;
+/** The clew cannot swing further than this either side (it would wrap round the forestay). */
+const GAMMA_STOP = 95 * DEG;
 
 export interface JibEvaluation { sections: SectionResult[]; sum: SailSum; luffMoment: number; clew: Vec3 }
 
@@ -41,10 +54,20 @@ export class JibModel {
   gammaDot = 0;
   /** Side whose sheet is working: +1 clew to port (wind from starboard), −1 to starboard. */
   workingSide: 1 | -1 = 1;
+  /** Rig side: +1 wind from starboard, −1 from port (with hysteresis; see `sideFromAwa`). */
+  tackSide: 1 | -1 = 1;
   sheetPort = 0.7;
   sheetStbd = 0;
   furl = 0;
+  /** Working sheet actually hauled (0…1): it follows `Controls.jibSheet` at rope-handling speed. */
+  sheet = 0.7;
+  /** Side the whisker pole holds the clew on: latched opposite the boom when the pole is set, moved only in a gybe. */
+  whiskerSide: 1 | -1 = -1;
+  /** Where the crew or the pole is holding the clew (rad), or null when the sheets alone work it. */
+  held: number | null = null;
   private haulT = HAUL_S;
+  private poled = false;
+  private primed = false;
   last: JibEvaluation | null = null;
 
   clewPoint(gamma: number, furl: number): Vec3 {
@@ -90,18 +113,27 @@ export class JibModel {
   evaluate(c: Controls, gamma: number, furl: number, air: AirContext, alphaShift: number, blanket = 1, gammaDot = 0): JibEvaluation {
     const geom = this.geometry(c, gamma, furl);
     const q = furl > 0.97 ? 0 : blanket; // a furled jib is a tight roll on the forestay
-    const sections = geom.map((g) => evaluateSection(g, JIB_AERO, air, { alphaShift, blanket: q, rotationRate: gammaDot }));
+    // The main's upwash is referred to the jib's own leeward side (belly away from the wind).
+    const sections = geom.map((g) => evaluateSection(g, JIB_AERO, air, { alphaShift, shiftSide: -this.tackSide, blanket: q, rotationRate: gammaDot }));
     let luffMoment = 0;
     for (const r of sections) luffMoment += (r.point.x - r.luff.x) * r.force.y - (r.point.y - r.luff.y) * r.force.x;
     return { sections, sum: sumSections(sections, { x: 0, y: 0, z: -BOAT.mass.cgH }), luffMoment, clew: this.clewPoint(gamma, furl) };
   }
 
-  /** Allowed clew range from both sheets (and the whisker pole), rad. */
+  /**
+   * Allowed clew range from both sheets (rad) — or, while the crew or a pole holds the clew, that held position
+   * (for a whisker pole not yet latched: its final position on this tack).
+   */
   limits(c: Controls, tackSign: number): { lo: number; hi: number } {
+    if (this.held !== null) return { lo: this.held, hi: this.held };
     if (c.jibWhisker) {
-      const a = -tackSign * WHISKER_ANGLE;
+      const a = (this.poled ? this.whiskerSide : -Math.sign(tackSign || 1)) * WHISKER_ANGLE;
       return { lo: a, hi: a };
     }
+    return this.sheetLimits(c);
+  }
+
+  private sheetLimits(c: Controls): { lo: number; hi: number } {
     const gc = sheetingAngle(c.jibLead);
     const out = (s: number) => OUT_MAX * Math.pow(1 - s, 1.3);
     const inn = (s: number) => IN_MAX * Math.pow(1 - s, 1.1);
@@ -110,39 +142,87 @@ export class JibModel {
     return lo <= hi ? { lo, hi } : { lo: (lo + hi) / 2, hi: (lo + hi) / 2 };
   }
 
-  step(dt: number, c: Controls, air: AirContext, alphaShift: number, blanket: number, awaRef: number): JibEvaluation {
+  /** Put the working sheet where the controls say, at once (scenario start). */
+  syncControls(c: Controls): void {
+    this.sheet = clamp(c.jibSheet, 0, 1);
+    this.primed = true;
+  }
+
+  /**
+   * Hold the clew where a pole or the crew would hold it for these controls, at once (scenario start): the whisker
+   * pole opposite the boom, a backed jib at −side·15°.
+   */
+  placeHeld(c: Controls, side: Side, boom: number): void {
+    const goal = this.holdGoal(c, side, boom);
+    this.held = goal;
+    if (goal !== null) { this.gamma = goal; this.gammaDot = 0; }
+  }
+
+  /** Where the clew should be held (rad), or null when the sheets work it. Latches the whisker side. */
+  private holdGoal(c: Controls, side: Side, boom: number): number | null {
+    if (!c.jibWhisker) this.poled = false;
+    else if (!this.poled) {
+      // The pole goes on the side opposite the boom (wing-on-wing) and stays there until a gybe.
+      this.whiskerSide = (Math.abs(boom) > 2 * DEG ? -Math.sign(boom) : -side) as Side;
+      this.poled = true;
+    }
+    if (c.jibWhisker) return this.whiskerSide * WHISKER_ANGLE;
+    if (c.jibBacked) return -side * BACKED_ANGLE;
+    return null;
+  }
+
+  /**
+   * Advance the clew one step. `side` is the rig side decided by the simulation and `boom` the boom angle (for
+   * the whisker pole); without them the model keeps its own side from `awaRef` with the same hysteresis.
+   */
+  step(dt: number, c: Controls, air: AirContext, alphaShift: number, blanket: number, awaRef: number, side?: Side, boom?: number): JibEvaluation {
     // Furling follows the control at a realistic winding rate.
     this.furl += clamp(c.jibFurl - this.furl, -0.3 * dt, 0.3 * dt);
+    if (!this.primed) this.syncControls(c);
+    this.sheet = approachRate(this.sheet, clamp(c.jibSheet, 0, 1), SHEET_HAUL_RATE, SHEET_EASE_RATE, dt);
+    const ca = this.sheet === c.jibSheet ? c : { ...c, jibSheet: this.sheet };
 
-    const tackSign = awaRef > 3 * DEG ? 1 : awaRef < -3 * DEG ? -1 : this.workingSide;
-    if (!c.jibBacked && !c.jibWhisker && tackSign !== this.workingSide) {
-      this.workingSide = tackSign as 1 | -1; // release the old sheet, start hauling the new one
+    const prevSide = this.tackSide;
+    this.tackSide = side ?? sideFromAwa(this.tackSide, awaRef);
+    // A gybe carries the whisker pole across with the boom.
+    if (this.poled && this.tackSide !== prevSide) this.whiskerSide = -this.tackSide as Side;
+    const goal = this.holdGoal(c, this.tackSide, boom ?? this.tackSide * 30 * DEG);
+    if (goal === null) this.held = null;
+    else {
+      if (this.held === null) this.held = this.gamma; // start from wherever the clew is
+      this.held += clamp(goal - this.held, -HOLD_RATE * dt, HOLD_RATE * dt);
+    }
+
+    if (!c.jibBacked && !c.jibWhisker && this.tackSide !== this.workingSide) {
+      this.workingSide = this.tackSide; // release the old sheet, start hauling the new one
       this.haulT = 0;
     }
     this.haulT = Math.min(HAUL_S, this.haulT + dt);
-    const working = clamp(c.jibSheet, 0, 1) * smoothstep(0, HAUL_S, this.haulT);
-    if (c.jibBacked) {
-      // Old sheet stays made fast; the lazy one is slack.
-      if (this.workingSide === 1) { this.sheetPort = clamp(c.jibSheet, 0, 1); this.sheetStbd = 0; }
-      else { this.sheetStbd = clamp(c.jibSheet, 0, 1); this.sheetPort = 0; }
-    } else if (this.workingSide === 1) { this.sheetPort = working; this.sheetStbd = 0; }
+    const working = this.sheet * smoothstep(0, HAUL_S, this.haulT);
+    if (this.workingSide === 1) { this.sheetPort = working; this.sheetStbd = 0; }
     else { this.sheetStbd = working; this.sheetPort = 0; }
 
-    const ev = this.evaluate(c, this.gamma, this.furl, air, alphaShift, blanket, this.gammaDot);
+    const ev = this.evaluate(ca, this.gamma, this.furl, air, alphaShift, blanket, this.gammaDot);
     this.last = ev;
-    const { lo, hi } = this.limits(c, tackSign);
+    const { lo, hi } = this.held !== null ? { lo: this.held, hi: this.held } : this.sheetLimits(ca);
     let m = ev.luffMoment - AIR_DAMP * this.gammaDot;
     // While the rope is stretched it damps both ways (rope hysteresis, block friction) — no elastic bounce.
     if (this.gamma > hi) m += -SHEET_K * (this.gamma - hi) - SHEET_C * this.gammaDot;
     else if (this.gamma < lo) m += -SHEET_K * (this.gamma - lo) - SHEET_C * this.gammaDot;
     this.gammaDot += (m / I_CLEW) * dt;
-    this.gamma = clamp(this.gamma + this.gammaDot * dt, -95 * DEG, 95 * DEG);
+    this.gamma += this.gammaDot * dt;
+    // Hard stop: the clew stops dead (C1: its rate must not keep growing against the clamp).
+    if (Math.abs(this.gamma) > GAMMA_STOP) {
+      const s = Math.sign(this.gamma);
+      this.gamma = s * GAMMA_STOP;
+      if (this.gammaDot * s > 0) this.gammaDot = 0;
+    }
     return ev;
   }
 
   state(ev: JibEvaluation, c: Controls, heel: number, awaRef: number): JibState {
     const s = ev.sum;
-    const leewardSide = awaRef >= 0 ? 1 : -1;
+    const leewardSide = this.tackSide; // clew side of a normally sheeted jib (+ port = wind from starboard)
     const set = this.furl < 0.97;
     return {
       id: 'jib',

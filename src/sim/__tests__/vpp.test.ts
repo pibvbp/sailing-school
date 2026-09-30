@@ -42,6 +42,39 @@ describe('steady-state performance (VPP)', () => {
     const dead = bestSpeed(6 * KN, 178 * DEG);
     expect(-broad.vmg).toBeGreaterThan(-dead.vmg);
   }, 60_000);
+
+  it('12 kn: pinching costs VMG (thresholds at the values achieved; see the sim-fix-1 report, I5)', () => {
+    const vmgAt = (a: number) => {
+      const r = solveSteady(12 * KN, a * DEG);
+      expect(r.converged, `TWA ${a}`).toBe(true);
+      return { vmg: r.speed * Math.cos(a * DEG), speed: r.speed };
+    };
+    let opt = { vmg: -Infinity, twa: 0 };
+    for (let a = 34; a <= 46; a += 2) { const v = vmgAt(a).vmg; if (v > opt.vmg) opt = { vmg: v, twa: a }; }
+    expect(opt.twa).toBeGreaterThanOrEqual(36);
+    expect(opt.twa).toBeLessThanOrEqual(44);
+    expect(vmgAt(30).vmg).toBeLessThan(0.97 * opt.vmg);
+    expect(vmgAt(25).vmg).toBeLessThan(0.87 * opt.vmg);
+    expect(vmgAt(20).speed / KN).toBeLessThan(3.0);
+  }, 120_000);
+
+  it('a steady result means settled on the requested angle (M7)', () => {
+    // Over-pressed reaches used to settle 4–15° below the angle asked for (the helm's integral ran out of
+    // authority at speed), mislabelling polar points; now each settles on its angle.
+    for (const [tws, twa] of [[20, 90], [20, 110], [16, 100]] as const) {
+      const r = bestSpeed(tws * KN, twa * DEG);
+      expect(r.converged, `${tws} kn ${twa}°`).toBe(true);
+      expect(Math.abs(r.twa! - twa * DEG), `${tws} kn ${twa}°`).toBeLessThan(1 * DEG);
+    }
+  }, 120_000);
+
+  it('bestSpeed does not drop a faster sail set that holds the angle on average (it flags it if unsettled) (M7)', () => {
+    const best = bestSpeed(20 * KN, 120 * DEG);
+    const jib = solveSteady(20 * KN, 120 * DEG);
+    expect(best.sails).toBe('spinnaker');
+    expect(best.speed).toBeGreaterThan(jib.speed);
+    expect(Math.abs(best.twa! - 120 * DEG)).toBeLessThan(3 * DEG);
+  }, 120_000);
 });
 
 describe('polar table', () => {

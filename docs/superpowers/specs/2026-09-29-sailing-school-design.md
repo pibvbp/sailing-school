@@ -185,10 +185,14 @@ Integration: fixed dt = 1/120 s, semi-implicit Euler; deterministic given the se
 ### 7.1 Wind
 - Gradient (ORC VPP 2023 §7.1): `V(h) = TWS · ln(max(h,0.3)/z0) / ln(10/z0)`, z0 = 0.005 m. (At the
   boom, ≈ 77 % of masthead wind → the apparent wind twists with height.)
-- **Puffs and lulls:** a seeded set of moving elliptical patches (radius 40–220 m, stretched across the
-  wind), strength −30 %…+45 % of TWS, direction offset ±12° (gusts usually veer), smooth fade in/out,
-  drifting downwind at ≈ the wind speed; spawned 400–900 m upwind of the boat, removed downwind.
-  `gustiness` 0…1 scales count and strength. The ocean renders each puff as darker, rougher water, and
+- **Puffs and lulls:** a seeded set of moving elliptical patches, `round(6·gustiness)` of them: radius along
+  the wind 40–120 m × (0.7 + 0.6·gustiness), across it 1.3–2× that; gusts (70 %) +15…+45 %, lulls −10…−30 %
+  of TWS, both × (0.5 + 0.5·gustiness); direction offset −6…+14° for gusts (they usually veer), ±8° for lulls;
+  life 90–240 s with a 20 s fade in/out; drifting downwind at 0.9 × the wind speed; spawned 400–900 m upwind
+  and within ±350 m across (the first fill spreads −250…900 m), removed 600 m downwind, 900 m to the side or
+  at the end of life. At a point: speed × max(0.2, 1 + Σ strength·w), direction + Σ offset·w / max(1, Σw)
+  (overlapping puffs average their shifts), w = envelope·exp(−(d_along²/r_along² + d_across²/r_across²)).
+  The ocean renders each puff as darker, rougher water, and
   wind particles speed up inside it, so the learner *sees* a gust arrive before it hits.
 - **Shifts:** `TWD(t) = TWD0 + A·sin(2πt/T + ϕ) + slow seeded noise`, A = 0…15°, T = 60–300 s.
 
@@ -215,19 +219,29 @@ Each sail is split into horizontal **sections** (main 8, jib 8, spinnaker 6). Pe
   - *Stall* beyond `α_stall = 0.21 + 0.8·camber` rad, blended over ≈ 4° into a normal-force model
     `Cn(α)` acting ⟂ chord: `Cl = Cn cos α`, `Cd = Cn sin α + cd0`; `Cn_max` main 1.34, jib 0.95,
     spinnaker 1.10 at α ≈ 35° falling to 0.64 at 90° (ORC tables, cloth-area basis).
+  - *Reversed flow* (α > 90°: the wind reaches the leech first): every blend is evaluated on the incidence to
+    the chord line a′ = π − α. The leech is a sharp leading edge, so there is no attached lift: the normal
+    force grows from 0 like a flat plate's, `Cn = Cn(90°)·sin a′/(0.56 + 0.44·sin a′)`, and the sail luffs again
+    as a′ → 0 (luffing threshold of a sail with its draft at 1 − draft). Continuous with the forward branch at 90°.
   - Induced drag per sail set: `Cdi = Cl²·A/(π·h_eff²)`, `h_eff = cheff·10.0 m`, cheff = 1.1 × kheff(AWA)
     (kheff 1.45 at 20° → 0.80 at 80°, ORC Fig. 5.14); spinnaker downwind cheff ≈ 1.0.
   - Depth/shape controls change camber, draft position and twist, so *full* sails give more power and a
     wider groove, *flat* sails less heel and a narrower groove.
 - **Main–jib interaction** (uses the previous step's lift coefficients): jib upwash
   `Δα_jib = +0.06·Cl_main·A_main/A_tot`, main downwash `Δα_main = −0.10·Cl_jib·A_jib/A_tot`, stronger
-  (×1.4) at the main's luff → backwinding appears as a luff bubble when the jib is over-trimmed.
-  Applies only when both sails are set on the same side (not wing-on-wing).
+  (×1.4) on the front 30 % of the main's chord (a potential-flow check with `src/flow` gives 1.3–1.4×). That
+  front part works at the lower angle: below `α_luff` it is backwinded — no lift, flogging drag — so the luff
+  bubble of an over-trimmed jib costs force, not just looks. Shifts are applied to the angle signed relative to
+  the leeward side the sail is set to (a section the wind reaches from its lee side is pushed further into
+  luffing, never into lifting to windward). Applies only when both sails are set on the same side (not
+  wing-on-wing).
 - **Blanketing:** a sail's `q` is reduced (to ≥ 20 %) when it lies in another sail's wind shadow,
   computed geometrically in the apparent-wind frame (main blankets jib and spinnaker on a run; a
   squared-back pole moves the spinnaker out of the shadow).
-- Section forces act at 38 % chord + 0.7·depth to leeward; total force, centre of effort and the moment
+- Section forces act at 38 % chord + 0.75·depth to leeward; total force, centre of effort and the moment
   about the mast (boom dynamics) are sums over sections.
+- A moving sail meets the air: the cloth's own swing velocity is subtracted from each section's airflow
+  (aerodynamic damping of boom and clew), capped at half the section's airflow.
 - **Calibration target:** with optimal trim at each AWA the model reproduces the ORC 2023 envelopes
   within ±15 % (main Cl 0.86 @ 7°, 1.16 @ 12°, 1.35 @ 28–60°, 1.27 @ 90°, 0.93 @ 120°, −0.11 @ 180°; jib
   1.0 @ 15°, 1.45 @ 27–50°, 0.40 @ 100°; spinnaker 0.66 @ 41°, 1.03 @ 67–75°, 0.64 @ 130°, 0 @ 180°).
@@ -236,67 +250,109 @@ Each sail is split into horizontal **sections** (main 8, jib 8, spinnaker 6). Pe
 - **Boom** angle β_b (dynamic): `I_b β̈ = M_aero + M_gravity + M_sheet + M_damping`, I_b ≈ 90 kg·m²
   (boom + sail + entrained air). Gravity swings the boom to the low side when heeled. The mainsheet is a
   **one-sided** constraint around the traveler car angle `β_car = atan(y_car/3.1)`:
-  `β_b ∈ [β_car − Δ, β_car + Δ]`, `Δ = 85°·(1 − sheet)^1.5`, stiff spring + damping when taut; hard stop
-  at ±80° (shrouds). Unconstrained, the boom weathervanes (sail luffs). Crossing the centreline with an
-  eased sheet produces a **crash gybe** event (|β̇| > 1.5 rad/s at impact).
+  `β_b ∈ [β_car − Δ, β_car + Δ]`, `Δ = 85°·(1 − sheet)^1.5` (within ±80°), stiff spring + damping when taut;
+  the shrouds are a hard stop at ±82° where the boom stops dead (rate zeroed). Unconstrained, the boom
+  weathervanes (sail luffs). A **crash gybe** event: the boom crosses the centreline with the wind from aft
+  (|AWA| > 100° at the crossing) and slams into the sheet or the shrouds (|β̇| > 1.5 rad/s at impact), or swings
+  from ≥ 40° out on one side to ≥ 40° out on the other within 2 s (from 6 kn TWS) — never during a crew-run
+  tack or gybe, nor while the boom is held by hand.
+- **Ropes are handled at a finite speed:** the sheet and traveler controls are targets. Sheets are hauled at
+  ≈ 0.35 of their range per second and eased at ≈ 1 per second; the traveler car is a physical state moving at
+  the same rates (to windward = hauling, 1.6 m track), so it never jumps when the tack flips — only its target
+  changes side.
+- **Which side the rig is set on:** head to wind the side changes once |AWA| > 3°; dead downwind only when
+  |AWA| < 165° on the new side, when the boom gybes across (> 5° over, |AWA| ≥ 165°), or when the crew gybes
+  the rig. The wind wobbling across the stern never moves main, jib, spinnaker or whisker pole.
 - **Twist:** leech tension `T = max(vang, sheet-tension-near-car)`; head twist `τ = 2° + 20°·(1−T)^1.3`
-  (+ a little more in puffs); section angle `θ(h) = β_b + side·τ·h^1.4`.
+  (+ a little more in puffs); section angle `θ(h) = β_b + side·τ·h^1.4`, side = the boom side (the tack side
+  while the boom is within 4–8° of the centreline), easing across in ≈ 0.3 s when the sail flips.
 - **Camber:** main base 11 %; outhaul flattens the lower third (−4 %), backstay flattens mid/upper
   (−3 %), cunningham moves draft forward (50 % → 40 %). Jib base 12 %; backstay tightens forestay (−2 %);
   lead forward = deeper foot, less twist; lead aft = flatter foot, more twist.
 - **Jib clew** angle γ (dynamic, light, I ≈ 6 kg·m²): leeward sheet limit
-  `γ ≤ 10° + 35°·(1 − sheet)^1.3`; windward sheet slack unless *back jib* is on (held at −15°).
-  When the bow passes head-to-wind the auto-crew releases the old sheet and hauls the new one in over
-  ≈ 2.5 s (the jib flogs meanwhile). Furling reduces area and lowers the centre of effort. Whisker pole
-  holds the clew out on the windward side (wing-on-wing).
+  `γ ≤ γ_lead + 29°·(1 − sheet)^1.3` (γ_lead ≈ 10–11.5°, lead aft → forward); windward sheet slack unless
+  *back jib* is on: then the crew holds the clew to windward at −side·15° whatever the sheet says (jib
+  auto-trim pauses). When the bow passes head-to-wind the auto-crew releases the old sheet and hauls the new
+  one in over ≈ 2.5 s (the jib flogs meanwhile). Furling reduces area and lowers the centre of effort.
+  Whisker pole: latched on the side opposite the boom when it is set, it holds the clew 80° out (square to a
+  following wind, wing-on-wing); the clew is carried onto it at ≈ 40°/s (2–3 s), never in a step, and the
+  pole moves across only when the rig gybes. The clew stops dead at ±95°.
+- **Boom held out by hand** (`boomPush`, −1…1, + = to port): the crew pushes the boom toward ±70° with what
+  one person can give (≈ 300 N at the boom end), never past the sheet; 0 lets go at once. Backing the main
+  this way, head to wind, drives the boat astern and turns the bow away from the side the boom is held on.
 - **Spinnaker:** hoist 6 s / douse 5 s (area ∝ hoist). Tack = pole tip; pole angle 0° (on the forestay)
   → 90° (squared); clew on a circle of radius = foot around the tack, limited by the sheet length to the
-  quarter block → chord angle from geometry. `α_curl` ≈ 8°: the luff curls just above it (optimal);
-  below `α_curl − 4°` for 0.6 s the sail **collapses** (area 20 %, flogging) and refills 1 s after α
-  recovers. Pole height off its optimum (tack level with clew) reduces efficiency. Over-trimmed →
-  stall, more heel, broach risk. Gybing moves the pole end-for-end (auto-crew, ≈ 6 s, reduced efficiency
-  while the pole is off).
+  quarter block and by the leech length (clew within SL of the head: one interval of chord angles
+  [ψ_lo, ψ_hi]; flown at ψ ≥ max(95°, ψ_lo) and ≤ ψ_hi) → chord angle from geometry. `α_curl` ≈ 16°: the
+  luff curls just above it (optimal); below `α_curl − 7°` for 0.6 s the sail **collapses** (area 20 %,
+  flogging) and it refills once α has been above `α_curl − 3°` for 1 s. Lifting efficiency builds to a peak
+  on a close reach (AWA 67–75°) and falls ≈ 10 % by 100–110° (ORC table shape). Pole height off its optimum
+  (tack level with clew) reduces efficiency. Over-trimmed → stall, more heel, broach risk. Gybing moves the
+  pole end-for-end (≈ 6 s, reduced efficiency while the pole is off) — only when the rig changes side.
 
 ### 7.5 Hull and appendages (`hydro.ts`)
 - Friction (ORC §6.1): `R_f = ½ρV²·S_c·Cf·1.05`, `Cf = 0.066/(log10 Re − 2.03)²`, `Re = V·0.85·LWL/ν`,
-  S_c = 12.0 m².
+  S_c = 11.0 m².
 - Residuary: `R_r = Δg·rr(Fn)`, monotone table rr = {0.10: 1e-4, 0.15: 4e-4, 0.20: 1.1e-3,
   0.25: 2.4e-3, 0.30: 4.7e-3, 0.35: 9.2e-3, 0.40: 0.018, 0.45: 0.033, 0.50: 0.048, 0.55: 0.058,
   0.60: 0.064, 0.70: 0.070} (tuned by the polar tests).
-- Heel drag: `(R_f + R_r)·0.8·sin²φ`. Sternway: symmetric with ×1.5.
+- Heel drag: `(R_f + R_r)·0.8·sin²φ`. Sternway: symmetric with ×1.5. Hull resistance acts along the surge
+  axis (from the surge speed); sideways motion is the cross-flow model's.
 - **Keel and rudder** are foils evaluated at their centres of pressure with local flow including yaw and
   roll rates (natural damping and weathercocking), valid for all 360°: attached `Cl = CLα·α`
   (Helmbold `CLα = 2π·AR/(AR+2)`, keel AR_eff 2.85 with the hull end-plate, rudder 4.5), stall at 14°
   (keel) / 22° (rudder) blending into a flat-plate normal force (Cn90 1.2); reversed flow handled.
   Profile drag `Cf(1+2t/c+60(t/c)⁴) + 0.0016|Cl| + 0.0032Cl²`; induced drag `L²/(q·π·T_eff²·0.9)`.
   Keel effective area includes the canoe body's lift (×1.25). Rudder loses effect with heel (area ×
-  cos φ, ventilation above 30°) → round-ups when over-powered.
+  cos φ, ventilation above 30°) → round-ups when over-powered. With way on the rudder sits in the keel's
+  downwash; going astern it is upstream of the keel and sees none (blended in over 0–0.3 m/s ahead).
 - Hull cross-flow drag along 10 stations (Cd 1.0) for slow sideways drift and pivoting.
 - Windage of hull, mast, rigging and crew (ORC Table 5.10 style) — why a boat in irons drifts backwards.
-- Righting moment `−Δg·GZ(φ)`; crew moment `m_c g y_c cos φ` (auto-hike to windward from ≈ 5° heel).
+- Righting moment `−Δg·GZ(φ)`; crew moment `m_c g y_c cos φ`. Auto-hike: to windward in proportion to
+  smoothstep(3°, 12°) of the heel to leeward (φ_L = −sign(TWA)·φ), centred when not heeled to leeward, a little
+  to leeward in light air (1–6 kn, not in a calm); downwind they counter whatever heel there is. The crew moves
+  with a first-order lag of ≈ 1 s.
 
 ### 7.6 Rigid-body dynamics
 State: e, n, ψ, u, v, r, φ, p (+ boom, jib clew, spinnaker, rudder, crew states). Equations in the
 heading frame: `(m+m_x)(u̇ − v r) = X`, `(m+m_y)(v̇ + u r) = Y`, `I_z ṙ = N`, `I_x ṗ = K`. Rudder follows
-the helm at ≤ 60°/s, max ±35°, self-centring. Heave and pitch are **not** simulated; the renderer adds
-wave-driven heave/pitch/roll on top (§9.3).
+the helm at ≤ 60°/s, max ±35° (a crew override too), self-centring. Heave and pitch are **not** simulated; the
+renderer adds wave-driven heave/pitch/roll on top (§9.3). Defence in depth: a step that ends in a non-finite
+state is undone (previous state, angular rates zeroed), counted in `faults` and warned about once — the physics
+itself must keep that count at 0.
 
 ### 7.7 Crew, autopilot, auto-trim, manoeuvres
-- Helm modes: manual, hold heading, hold TWA, hold AWA (PD on rudder, gains ∝ 1/V² bounded).
-- Auto-trim per sail ("the crew"): main to α ≈ 60 % of the way from luff to stall upwind, near max
-  lift off the wind, and depowers via traveler/sheet above 22° heel; jib to the middle of the groove;
-  spinnaker pole ⟂ apparent wind, sheet to just-curling.
-- Tack: needs ≥ 2 kn; steers through the wind at a realistic rate, releases/hauls the jib, flips the
-  traveler, settles on the mirrored close-hauled TWA. Gybe: bear away to ~170°, main in, turn through,
-  ease out, jib across, pole end-for-end if flying. Both double as "Show me" demos.
-- Events: `crashGybe`, `inIrons` (|TWA| < 30° and speed < 0.5 kn for 3 s), `tackComplete`,
-  `gybeComplete`, `spinCollapse`, `spinRefill`, `roundUp`, `luffing`, `backwinded`.
+- Helm modes: manual, hold heading, hold TWA, hold AWA (PID on rudder: P and D gains ∝ 1/V², bounded; the
+  integral is kept as a rudder angle up to the stops, so the autopilot holds its angle at any speed).
+- Auto-trim per sail ("the crew"): main to α ≈ 85 % of the way from luff to stall upwind, near max
+  lift off the wind, and depowers via traveler/sheet above 22° heel; jib to 75 % of the groove;
+  spinnaker pole ⟂ apparent wind (from a 1 s-smoothed reading), sheet to just-curling. Jib trim pauses while
+  the jib is backed or poled out, main trim while someone holds the boom out by hand. With the jib on auto the
+  crew furls it on a spinnaker hoist and unfurls it on the douse — only on those edges, so a learner's furl
+  otherwise stands.
+- Tack: needs ≥ 2 kn; steers through the wind at a realistic rate with the traveler centred and the mainsheet
+  left alone while the bow swings through, releases/hauls the jib, settles on the mirrored close-hauled TWA.
+  Gybe: bear away to ~176°, haul the main in as the stern comes to 166–174° (hauled on a broad reach it would
+  lay the boat over), turn through, gybe the rig (jib across, traveler over, pole end-for-end if flying), let the
+  main run back out. Both double as "Show me" demos. The learner may keep steering: moving the tiller more than
+  20 % of its travel from where it was, or changing the helm mode, hands them the helm at once — the crew keeps
+  working the sheets and never takes it back in that manoeuvre. Every phase has a timeout (turn, cross ≤ 15 s;
+  settle ≤ 10 s) after which the crew ends the manoeuvre cleanly and releases every override. A scenario reset
+  resets the crew too.
+- Events: `crashGybe` (§7.4), `inIrons` (|TWA| < 30° and speed < 0.5 kn for 3 s), `tackComplete`,
+  `gybeComplete`, `spinCollapse`, `spinRefill`, `roundUp` (heel > 25°, the bow swinging toward the wind faster
+  than 8°/s with less than 5° of rudder toward the wind — tiller centred or fighting it), `luffing`,
+  `backwinded`.
 
 ### 7.8 Steady-state solver (VPP) and polars
 `solveSteady(TWS, TWA, trim)` finds (V, leeway, heel, rudder) with zero net X, Y, K, N using the
 *same* force functions (Newton with numerical Jacobian); `bestSpeed` optimises trim (sheet angles,
-flatten, spinnaker vs jib). `scripts/polars.mjs` writes `src/sim/data/polars.json` (TWS 4–25 kn,
-TWA 30–180° step 2°). UI uses it for target speed and optimal VMG angles.
+flatten, spinnaker vs jib). A steady result means the speed has settled with the boat on the requested TWA
+(within 1°); an unsettled run is retried for twice as long, then reported as its 20 s average with
+`converged: false`, and a sail set that cannot hold the angle does not compete with one that can.
+`scripts/polars.ts` writes `src/sim/data/polars.json` (TWS 4–25 kn, TWA 30–180° step 5°; the optimal VMG
+angles are refined between grid angles with a parabola; points that never settled are listed in
+`unconverged`). UI uses it for target speed and optimal VMG angles.
 **Plausibility bands** (J/24-class references; the polar is produced by sailing the simulated boat to
 steady state with the auto-crew, `src/sim/vpp.ts`): 6 kn — beat 3.2–4.6 kn, 90° 3.8–5.2, 150° 2.9–4.4;
 12 kn — beat 4.9–6.0, 90° 6.0–7.2, 150° 5.2–6.8; 20 kn — beat 5.0–6.3, 90° 7.0–8.6, 150° 7.0–8.8.

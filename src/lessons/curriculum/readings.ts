@@ -8,7 +8,10 @@ import polarData from '../../sim/data/polars.json';
 
 // ---- boat and wind -----------------------------------------------------------------------------
 
+/** Speed through the water (kn), whichever way the boat is moving — going astern counts too. */
 export const speedKn = (s: SimSnapshot): number => toKn(s.boat.speed);
+/** Speed along the boat's heading (kn): negative while she makes sternway. Use it for "sailing again" checks. */
+export const forwardKn = (s: SimSnapshot): number => toKn(s.boat.u);
 /** Signed true wind angle (deg): + = wind from starboard (starboard tack). */
 export const twaDeg = (s: SimSnapshot): number => toDeg(s.wind.twa);
 export const absTwa = (s: SimSnapshot): number => Math.abs(twaDeg(s));

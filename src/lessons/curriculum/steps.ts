@@ -25,7 +25,7 @@ const SCRATCH = '__step';
 /** Controls a learner can grab. A change the crew or the sim did not make means the learner took over. */
 const WATCHED = [
   'helmMode', 'helmTarget', 'tiller', 'mainSheet', 'traveler', 'vang', 'outhaul', 'cunningham', 'backstay',
-  'jibSheet', 'jibLead', 'jibFurl', 'jibBacked', 'jibWhisker', 'spinHoist', 'spinPole', 'spinPoleHeight', 'spinSheet',
+  'jibSheet', 'jibLead', 'jibFurl', 'jibBacked', 'jibWhisker', 'boomPush', 'spinHoist', 'spinPole', 'spinPoleHeight', 'spinSheet',
 ] as const;
 type Watched = (typeof WATCHED)[number];
 const MAIN: ReadonlySet<Watched> = new Set(['mainSheet', 'traveler', 'vang', 'outhaul', 'cunningham', 'backstay']);
@@ -63,7 +63,8 @@ function learnerTookOver(prev: Seen, c: LessonCtx): boolean {
   for (const key of WATCHED) {
     const now = k[key], was = prev.values[key];
     if (now === was) continue;
-    if (key === 'helmMode' || key === 'helmTarget') { if (!crewSteering) return true; continue; }
+    // The crew takes the helm for its tacks and gybes, and lets go of a boom held out by hand as they start.
+    if (key === 'helmMode' || key === 'helmTarget' || key === 'boomPush') { if (!crewSteering) return true; continue; }
     if (key === 'tiller') {
       // The tiller springs back toward centre by itself; moving it further over, or across to the other side
       // (counter-steering), is the learner.
