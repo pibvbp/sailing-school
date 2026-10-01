@@ -58,12 +58,13 @@ export class OceanSurfaceMaterial {
       uFogDensity: { value: 0 },
       uHazeMax: { value: 0.75 },
       uStreaks: { value: 0 },
+      uGlintTime: { value: 0 },
       // water; texture offsets relative to uRef (see setTime)
       uRef: { value: new THREE.Vector2() },
       uOffRipple: { value: new THREE.Vector4() },
       uOffFoamA: { value: new THREE.Vector4() },
       uOffFoamB: { value: new THREE.Vector4() },
-      uOffFoamC: { value: new THREE.Vector4() },
+      uWindrowDrift: { value: 0 },
       // Irradiance reflectance of clear sea water (π·Rrs): ≈ 4 % in the blue, a third of that in the
       // green, almost nothing in the red — clear water is blue because red is absorbed within metres.
       uWaterScatter: { value: new THREE.Vector3(0.0022, 0.0135, 0.041) },
@@ -154,6 +155,7 @@ export class OceanSurfaceMaterial {
     const u = this.u;
     const wd = u['uWindDirTo']!.value as THREE.Vector2;
     (u['uRef']!.value as THREE.Vector2).set(refX, refZ);
+    u['uGlintTime']!.value = (t * 6) % 256;
     // Wind frame (the shader's windFrame · v) and the ripple layers' rotation, applied to the reference.
     const wa = wd.x * refX + wd.y * refZ, wc = -wd.y * refX + wd.x * refZ;
     const ra = 0.8339 * refX - 0.5519 * refZ, rc = 0.5519 * refX + 0.8339 * refZ;
@@ -161,11 +163,11 @@ export class OceanSurfaceMaterial {
       fract(refX * 8.3 + wd.x * t * 0.6), fract(refZ * 8.3 + wd.y * t * 0.6),
       fract(ra * 23 - wd.x * t * 1.3), fract(rc * 23 - wd.y * t * 1.3));
     (u['uOffFoamA']!.value as THREE.Vector4).set(
-      fract(wa * 0.031 * 0.22 + t * 0.004), fract(wc * 0.031 - t * 0.003),
-      fract(wa * 0.145 * 0.22 - t * 0.011), fract(wc * 0.145 - t * 0.008));
+      fract(wa * 0.145 * 0.45 - t * 0.011), fract(wc * 0.145 - t * 0.008),
+      fract(refX * 0.62 - t * 0.03), fract(refZ * 0.62 + t * 0.021));
     (u['uOffFoamB']!.value as THREE.Vector4).set(
-      fract(refX * 0.62 - t * 0.03), fract(refZ * 0.62 + t * 0.021), fract(refX * 0.23), fract(refZ * 0.23));
-    (u['uOffFoamC']!.value as THREE.Vector4).set(fract(refX * 0.92 + 0.31), fract(refZ * 0.92 + 0.31), fract(-t * 0.0003), 0);
+      fract(refX * 0.23), fract(refZ * 0.23), fract(refX * 0.92 + 0.31), fract(refZ * 0.92 + 0.31));
+    u['uWindrowDrift']!.value = fract(-t * 0.0003);
   }
 
   /** Sun, sky reflection and haze from the shared SkyState and the scene fog. */
@@ -213,8 +215,8 @@ export class OceanSurfaceMaterial {
     u['uWindSpeed']!.value = windSpeed;
     (u['uWindDirTo']!.value as THREE.Vector2).set(-Math.sin(windFrom), Math.cos(windFrom));
     u['uHs']!.value = Math.max(s.totalHs, 0.02);
-    // Foam streaks along the wind from a fresh breeze (Beaufort 5) up.
-    u['uStreaks']!.value = THREE.MathUtils.smoothstep(windSpeed / KN, 14, 24);
+    // Foam blown into streaks along the wind belongs to a near gale (Beaufort 7); a strong breeze shows the first hint.
+    u['uStreaks']!.value = THREE.MathUtils.smoothstep(windSpeed / KN, 22, 34);
     const mssMean = coxMunkMss(windSpeed);
     u['uMssMean']!.value = mssMean;
     u['uUnresolvedMss']!.value = Math.max(mssMean - stats.resolvedMss, 0.0015);

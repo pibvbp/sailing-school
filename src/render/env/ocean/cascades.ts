@@ -9,7 +9,7 @@ import type { QualitySettings } from '../../core/types';
 import { PackedFFT, type SpectrumUniforms } from './fft';
 import { FullScreenPass, makeRT } from './gpuPass';
 import { ASSEMBLE_FRAG } from './shaders/fft.glsl';
-import { bandMoments, capillaryFade, compassToWorldAngle, seaState, whitecapActivity, type JonswapParams, type SeaState } from './spectrum';
+import { bandMoments, capillaryFade, compassToWorldAngle, GRAVITY, seaState, whitecapActivity, type JonswapParams, type SeaState } from './spectrum';
 import type { OceanParams } from './types';
 
 /** Per-cascade slope statistics the surface shader needs to split slope into normals and roughness. */
@@ -21,11 +21,25 @@ const LENGTHS: Record<2 | 3, readonly number[]> = { 3: [251.3, 37.13, 7.07], 2: 
 const CHOP_SCALE = [0.85, 1.0, 1.0];
 /** Air entrainment per cascade: the energetic band breaks, the capillary band only glistens. */
 const FOAM_SCALE = [1.0, 0.8, 0.15];
+/**
+ * Breaking events per cascade (see ASSEMBLE_FRAG): the size of one event cell (m), and the lifetime of an event in
+ * periods of the wave that breaks. A cap is a few metres of a dominant crest, or half a metre of a wavelet riding it.
+ */
+const GATE_CELL_M = [5.5, 1.5, 0.5];
+const GATE_LIFE_PERIODS = 0.5;
+/** Breaking crests are shorter and slower than the spectral peak. */
+const BREAKER_WAVELENGTH = 0.7;
+/** The noise level above which an event cell is open, against wind (kn): about 4 % of the sea at 12 kn, 15 % at 25 kn. */
+const GATE_LEVEL: ReadonlyArray<readonly [number, number]> = [[10.5, 0.74], [14, 0.70], [20, 0.655], [25, 0.63], [30, 0.61]];
 const SWELL_FADE = 3.0;
 const ANISOTROPY = 8;
-/** Breaking threshold (slope, in RMS units of the cascade band) against wind (kn). */
+/**
+ * Breaking threshold (slope, in RMS units of the cascade band) against wind (kn). Set with the event gate above so
+ * that the white share of the sea, measured in pictures from above, is in the range of published whitecap coverage:
+ * about 0.1 % at 12 kn, 0.5 % at 18 kn and 1.5 % at 25 kn.
+ */
 const BREAKING_THRESHOLD: ReadonlyArray<readonly [number, number]> = [
-  [10.5, 2.75], [12, 2.5], [14, 2.22], [16, 1.99], [20, 1.64], [25, 1.38], [30, 1.2],
+  [10.5, 1.9], [12, 1.6], [15, 1.42], [18, 1.3], [22, 1.22], [25, 1.13], [30, 1.0],
 ];
 
 export type CascadeUniforms = Record<string, THREE.IUniform>;
@@ -55,6 +69,9 @@ export class OceanCascades {
   private invSigma: number[] = [1, 1, 1];
   private invSlopeSigma: number[] = [1, 1, 1];
   private foam = { mul: 0, steepBias: 3, foldBias: 0.35, decay: 0.35 };
+  /** Breaking events per cascade: cells across the tile, their speed downwind (m/s) and lifetime (s); the open level. */
+  private gate = { cells: [1, 1, 1], speed: [0, 0, 0], life: [1, 1, 1], level: 1 };
+  private readonly gateState = new THREE.Vector4();
   private dirty = true;
   private frame = 0;
   private lastTime = Number.NaN;
@@ -78,6 +95,7 @@ export class OceanCascades {
       uLambda: { value: 1 }, uFoamBias: { value: 0.4 }, uSteepBias: { value: 3 },
       uInvSigma: { value: 1 }, uInvSlopeSigma: { value: 1 }, uUpwind: { value: this.upwind },
       uFoamMul: { value: 0 }, uFoamDecay: { value: 0.35 }, uBubbleDecay: { value: 0.6 }, uDt: { value: 0 },
+      uGate: { value: this.gateState }, uGateCells: { value: 1 }, uTexels: { value: 256 },
     }, 'oceanAssemble');
     this.build(q);
     this.setParams(params);
@@ -113,12 +131,18 @@ export class OceanCascades {
     const fields = this.fft.transform(this.renderer, t);
     this.frame++;
     const ap = this.assemble;
-    ap.set('uBuf0', fields.textures[0]).set('uBuf1', fields.textures[1]).set('uDt', Math.min(dt, 0.1));
+    ap.set('uBuf0', fields.textures[0]).set('uBuf1', fields.textures[1]).set('uDt', Math.min(dt, 0.1)).set('uTexels', this.n);
     for (let c = 0; c < this.count; c++) {
       const pair = this.targets[c]!;
       const cur = this.frame & 1 ? pair.a : pair.b;
       const prev = cur === pair.a ? pair.b : pair.a;
       const scale = FOAM_SCALE[c] ?? 1;
+      // The event cells ride downwind with the crests; everything is wrapped here, in double precision.
+      const cells = this.gate.cells[c]!, travelled = (this.gate.speed[c]! * t) / this.lengths[c]!;
+      this.gateState.set(
+        cells * fract(-this.upwind.x * travelled), cells * fract(-this.upwind.y * travelled),
+        (t / this.gate.life[c]!) % 64, this.gate.level);
+      ap.set('uGateCells', cells);
       ap.set('uOffset', c * this.n)
         .set('uPrevTurb', prev.textures[2])
         .set('uLambda', this.params.choppiness * (CHOP_SCALE[c] ?? 1))
@@ -215,10 +239,20 @@ export class OceanCascades {
     // crest must reach falls with wind (Beaufort: occasional caps at 12 kn, fairly frequent at 16 kn,
     // many at 20 kn). Residual foam is laid per unit of breaking.
     const activity = whitecapActivity(p.windSpeed);
-    this.foam.mul = activity > 0 ? 2.6 : 0;
+    this.foam.mul = activity > 0 ? 5 : 0;
     this.foam.steepBias = interpTable(BREAKING_THRESHOLD, p.windSpeed / KN);
     this.foam.foldBias = 0.3 + 0.25 * activity;
     this.upwind.set(Math.sin(p.windFrom), -Math.cos(p.windFrom));
+    // The wave that breaks in each cascade: the dominant one, or the longest the band holds if that is shorter.
+    for (let c = 0; c < this.count; c++) {
+      const longest = (2 * Math.PI) / Math.max(this.cuts[c]!, 1e-4);
+      const lambda = BREAKER_WAVELENGTH * Math.min(peakLambda, longest);
+      const speed = Math.sqrt((GRAVITY * lambda) / (2 * Math.PI));
+      this.gate.cells[c] = Math.max(1, Math.round(this.lengths[c]! / GATE_CELL_M[c]!));
+      this.gate.speed[c] = speed;
+      this.gate.life[c] = Math.max((GATE_LIFE_PERIODS * lambda) / speed, 0.25);
+    }
+    this.gate.level = interpTable(GATE_LEVEL, p.windSpeed / KN);
     this.lastTime = Number.NaN;
     this.version++;
   }
@@ -229,3 +263,5 @@ export class OceanCascades {
     this.targets = [];
   }
 }
+
+const fract = (x: number): number => x - Math.floor(x);

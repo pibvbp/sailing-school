@@ -1,6 +1,7 @@
 // Three crew figures (spec §9.5): helmsman at the tiller and two trimmers in foul-weather gear. Rigid body
 // parts (lathes, capsules) hang on an 11-joint skeleton that is posed on the CPU and written into two
-// vertex-coloured meshes: the trimmers, and the helmsman (who can be hidden per camera — see HIDE_HELMSMAN).
+// vertex-coloured meshes: the trimmers and the helmsman (each can be hidden per camera — see HIDE_TRIMMERS and
+// HIDE_HELMSMAN).
 //
 // Motion: every figure keeps its own pose state (seat position, hip height, facing, lean, legs over the
 // rail, head turn) that follows targets derived from crewY at bounded rates, so nothing can jump whatever
@@ -19,6 +20,8 @@ type Role = 'helm' | 'main' | 'jib';
 
 /** Set `camera.userData[HIDE_HELMSMAN] = true` on cameras placed at the helmsman's eyes. */
 export const HIDE_HELMSMAN = 'hideHelmsman';
+/** Set `camera.userData[HIDE_TRIMMERS] = true` on a camera that the trimmers would sit right in front of. */
+export const HIDE_TRIMMERS = 'hideTrimmers';
 
 export interface CrewInput {
   /** Crew lateral position −1 (port) … +1 (starboard). */
@@ -404,13 +407,16 @@ export class CrewSet {
     // Per-camera hide: a camera flagged HIDE_HELMSMAN draws nothing of him. The range is restored straight after
     // the draw, because the shadow pass (which never calls onBeforeRender) must always see the whole figure —
     // otherwise his shadow vanishes in the helm view and flickers whenever the telltale cam renders.
-    const helm = this.buffers[1].mesh;
-    helm.onBeforeRender = (_r, _s, camera, geometry) => {
-      geometry.setDrawRange(0, camera.userData[HIDE_HELMSMAN] ? 0 : Infinity);
-    };
-    helm.onAfterRender = (_r, _s, _camera, geometry) => {
-      geometry.setDrawRange(0, Infinity);
-    };
+    // The trimmers have the same switch: the helm view stands an arm's length behind them.
+    [HIDE_TRIMMERS, HIDE_HELMSMAN].forEach((flag, i) => {
+      const mesh = this.buffers[i]!.mesh;
+      mesh.onBeforeRender = (_r, _s, camera, geometry) => {
+        geometry.setDrawRange(0, camera.userData[flag] ? 0 : Infinity);
+      };
+      mesh.onAfterRender = (_r, _s, _camera, geometry) => {
+        geometry.setDrawRange(0, Infinity);
+      };
+    });
   }
 
   /** Show or hide the helmsman in every view. */

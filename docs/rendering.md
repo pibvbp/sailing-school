@@ -66,20 +66,34 @@ ends exactly on the horizon. The shading combines:
 - sky reflection with a Fresnel term, from a baked map of the sky. The lookup is averaged over the angle a
   wind-ruffled surface scatters it (about ±13° in 12 knots, from the Cox–Munk slopes), so a bright cloud lightens a
   stretch of water but is never mirrored as a shape. In a calm the slopes vanish and the reflection sharpens;
-- the sun's glitter, as a GGX highlight;
+- the sun's glitter. The lobe is Gaussian, as the slopes of a wind-ruffled sea are, and gives the mean brightness
+  of a pixel. Close to the eye a pixel holds only a few glinting wavelets, so there the same light is dealt out as
+  separate glints: a share of the cells of a grid fixed to the water is lit at one glint's brightness and the rest
+  stays dark. The cells are dealt again six times a second, so the glitter twinkles. Far away, where a pixel holds
+  many glints, it shows the mean;
 - Cox–Munk roughness for the ripples too small for the mesh;
 - light scattering through the wave crests;
 - haze toward the horizon;
 - on High and Ultra, a planar reflection of the boat and marks, distorted by the waves. The teaching overlays are kept
-  out of it.
+  out of it. It fades where the water is seen at a shallow angle, sooner the more wind: a ruffled sea smears an image
+  over some ±20°, so the hull beside you is mirrored and an island on the horizon is not.
 
 **Wind on the water.**
 
 - **Whitecaps** are keyed to the wind: none below about 10.5 knots, the first scattered caps at 12–14 knots, plenty by
-  20 knots. Foam comes from the steepest crests of each tile and lingers as it decays. Only the tumbling front of a
-  breaker, a band along the top of the crest, is dense white; what it leaves behind is lace. Where a pixel is too
-  far away to resolve the lace, foam is drawn by the fraction of the pixel it covers, so a distant patch fades at
-  its edges and does not turn into a hard-edged white shape.
+  20 knots.
+  - A crest of a computed sea that is steep enough to break stays that steep for as long as it rides through its wave
+    group, over its whole width. A real whitecap is an event: a few metres of one crest spill for a second or two.
+    So a crest breaks only where a breaking event is open: a noise field of cells a few metres across that travels
+    downwind with the crests and changes within half a wave period
+    ([`shaders/fft.glsl.ts`](../src/render/env/ocean/shaders/fft.glsl.ts)).
+  - The cap lays foam on the water it passes over, and that foam decays in a few seconds. Foam is drawn marbled:
+    strands along the level lines of two noise layers, one drawn out downwind. The amount of foam decides how far
+    from a strand the white reaches, so a fresh cap is nearly solid with a torn edge, and as it ages holes open in it
+    until only the strands are left.
+  - Where a pixel is too far away to resolve the strands, foam is drawn by the fraction of the pixel it covers.
+  - The share of the sea that is white is in the range of measured whitecap coverage: about 0.1 % at 12 knots, 0.5 %
+    at 18 and 1.5 % at 25.
 - **Gusts and lulls.** The simulation's gust patches make the water darker and matte, like a cat's paw; lulls turn it
   glassy and silvery. So you can see a gust coming.
 
@@ -88,7 +102,9 @@ ends exactly on the horizon. The shading combines:
 - **Hull waves.** The bow wave heaped at the stem, the trough amidships and the stern wave are computed around the hull
   and grow with speed.
 - **The wake.** A world-space texture that scrolls with the boat holds the churned water, bubbles and the long glassy
-  slick behind it ([`wake.ts`](../src/render/env/ocean/wake.ts)).
+  slick behind it ([`wake.ts`](../src/render/env/ocean/wake.ts)). The white water is gone within a boat length. The
+  lighter, smoother track behind it is read through a slow noise, so it wanders and frays instead of lying ruler
+  straight.
 - **The Kelvin wake.** A ribbon of past stern positions draws its 19.47° wedge of transverse and diverging waves, with
   foam on the cusps as the boat nears hull speed.
 - **Bow spray** ([`spray.ts`](../src/render/env/ocean/spray.ts)) flies when the drawn waves bury the bow.
@@ -165,7 +181,8 @@ physics uses.
   the name on the transom. Static parts are merged per material to keep draw calls down.
 - **Moving parts** follow the snapshot: the boom, tiller and rudder, jib clew and sheets, spinnaker pole, the jib-lead
   and traveler cars, and three crew figures, a helmsman and two trimmers. The crew stand on an 11-joint skeleton; they
-  hike, and on a tack they cross the cockpit under the boom instead of jumping.
+  hike, and on a tack they cross the cockpit under the boom instead of jumping. The helm view, which stands in the
+  helmsman's place an arm's length behind the trimmers, draws none of them; their shadows stay.
 
 ## Sails, telltales, windex and burgee
 

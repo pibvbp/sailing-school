@@ -101,7 +101,7 @@ export class Ocean {
   setXray(on: boolean): void { this.xrayOn = on; }
   /** Keep objects out of the planar reflection (sky domes named 'sky' are found automatically). */
   excludeFromReflection(...objects: THREE.Object3D[]): void { this.reflection.addExclusions(...objects); }
-  /** Diagnostic views: 0 off, 1 wake trail, 2 foam, 3 normal, 4 roughness, 5 gust field, 6 Fresnel, 7 Kelvin. */
+  /** Diagnostic views: 0 off, 1 wake trail, 2 foam, 3 normal, 4 roughness, 5 gust field, 6 Fresnel, 7 Kelvin, 8 sun glitter, 9 reflected sky, 10 light from the water. */
   setDebugView(mode: number): void { this.surface.uniforms['uDebugMode']!.value = mode; }
 
   setQuality(q: QualitySettings): void {

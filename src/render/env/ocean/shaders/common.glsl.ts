@@ -3,8 +3,15 @@
 // Copyright (c) 2026 Davi (Token-Gremlin), MIT License — adapted for sailing-school (subset, renamed
 // to avoid clashing with three.js shader chunks).
 
-export const NOISE_GLSL = /* glsl */ `
+/** The hash on its own, for shaders that need a random number per cell and none of the noise below. */
+export const HASH_GLSL = /* glsl */ `
 float oHash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+/** One random number per cell and layer (a whole number below a few hundred): each layer reads the hash elsewhere. */
+float oHashLayer(vec2 cell, float layer) { return oHash12(cell + vec2(37.13, 91.71) * layer); }
+`;
+
+export const NOISE_GLSL = /* glsl */ `
+${HASH_GLSL}
 vec2 oHash22(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.xx + p3.yz) * p3.zy); }
 float oValueNoise(vec2 x) {
   vec2 i = floor(x), f = fract(x);
@@ -47,6 +54,11 @@ float oGgxD(float NoH, float a) {
   float a2 = a * a;
   float d = (NoH * a2 - NoH) * NoH + 1.0;
   return a2 / max(3.14159265 * d * d, 1e-8);
+}
+/** Beckmann distribution for a Gaussian sea of slope variance m2 (Cox–Munk slopes are Gaussian: no long tail). */
+float oBeckmannD(float NoH, float m2) {
+  float c2 = max(NoH * NoH, 1e-4);
+  return exp(-(1.0 - c2) / (c2 * m2)) / (3.14159265 * m2 * c2 * c2);
 }
 float oSmithGgxCorrelated(float NoV, float NoL, float a) {
   float a2 = a * a;

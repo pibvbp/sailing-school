@@ -12,7 +12,7 @@ import type { QualitySettings } from '../core/types';
 import { buildKeel, buildRudderBlade } from './appendages';
 import { buildCabin } from './cabin';
 import { buildCockpit } from './cockpit';
-import { CrewSet, HIDE_HELMSMAN, type CrewInput } from './crew';
+import { CrewSet, HIDE_HELMSMAN, HIDE_TRIMMERS, type CrewInput } from './crew';
 import { COCKPIT, buildDeck, topSurfaceH } from './deck';
 import {
   HARDWARE, block, buildFittings, frame, guyBlock, jibLeadPoint, lathe, leadCarParts, loc, primaryDrum, quarterBlock,
@@ -102,6 +102,8 @@ export interface BoatOptions {
 export class BoatModel {
   /** `camera.userData` key: cameras with this flag set to true do not draw the helmsman (helm/PiP views). */
   static readonly HIDE_HELMSMAN = HIDE_HELMSMAN;
+  /** `camera.userData` key: cameras with this flag set to true do not draw the two trimmers (the helm view). */
+  static readonly HIDE_TRIMMERS = HIDE_TRIMMERS;
 
   readonly root = new THREE.Group();
   readonly anchors: {

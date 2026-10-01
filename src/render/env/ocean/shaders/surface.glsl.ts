@@ -6,7 +6,7 @@
 // sailing-school: disaster fields, clouds and atmosphere LUTs removed; sky, sun and haze come from our
 // SkyState (PMREM env map); gust/lull patches, boat wake foam/slick, hull cut-out and x-ray added.
 import { OCEAN_SAMPLE_GLSL } from './oceanSample.glsl';
-import { BRDF_GLSL } from './common.glsl';
+import { BRDF_GLSL, HASH_GLSL } from './common.glsl';
 import { HULL_WAVE_GLSL } from './hullWave.glsl';
 
 export const MAX_PUFFS = 24;
@@ -242,9 +242,9 @@ uniform vec3 uCamPos;
 // textures stay sharp and still after hours of sailing and kilometres from the origin.
 uniform vec2 uRef;
 uniform vec4 uOffRipple;   // ripple layer 0 xy, layer 1 xy
-uniform vec4 uOffFoamA;    // whitecap lace fx0 xy, fx1 xy
-uniform vec4 uOffFoamB;    // fx2 xy, boat-foam lace (coarse) xy
-uniform vec4 uOffFoamC;    // boat-foam lace (fine) xy, windrow drift, 0
+uniform vec4 uOffFoamA;    // whitecap strands: drawn out downwind xy, fine xy
+uniform vec4 uOffFoamB;    // boat-foam lace: coarse xy, fine xy
+uniform float uWindrowDrift;
 uniform vec3 uSunDir;
 uniform vec3 uSunRadiance;
 uniform vec3 uWaterScatter;
@@ -261,6 +261,7 @@ uniform float uAnisoMax;
 uniform float uFogDensity;
 uniform float uHazeMax;
 uniform float uStreaks;   // 0…1 wind-aligned foam streaks (fresh breeze and up)
+uniform float uGlintTime; // sea time in sixths of a second, wrapped: the glitter's cells are dealt again each step
 uniform sampler2D uOceanDeriv0, uOceanDeriv1, uOceanDeriv2;
 uniform sampler2D uOceanTurb0, uOceanTurb1, uOceanTurb2;
 uniform vec3 uOceanScales;
@@ -275,11 +276,12 @@ uniform vec2 uKelvinStep; // one Kelvin texel in uv and in metres
 uniform vec4 uBoat;       // world x, z, forward x, forward z
 uniform vec4 uHullShape;  // stem x, transom x, max-beam x, half beam (boat-local, m)
 uniform vec4 uHullState;  // enabled, heel (rad), x-ray 0..1, speed (m/s)
-uniform float uDebugMode; // 0 off, 1 wake trail, 2 foam, 3 normal, 4 roughness, 5 gusts, 6 Fresnel, 7 Kelvin
+uniform float uDebugMode; // 0 off, 1 wake trail, 2 foam, 3 normal, 4 roughness, 5 gusts, 6 Fresnel, 7 Kelvin, 8 sun glitter, 9 reflected sky, 10 light from the water
 uniform sampler2D uReflection;
 uniform mat4 uReflectionMatrix;   // mirror camera view-projection
 uniform float uReflectionOn;
 ${BRDF_GLSL}
+${HASH_GLSL}
 ${ENV_LOOKUP_GLSL}
 ${HULL_WAVE_GLSL}
 
@@ -306,6 +308,28 @@ float insideHull(vec2 l) {
 }
 
 float coxMunk(float u) { return 0.002 + 0.00512 * u * smoothstep(0.6, 3.0, u); }
+
+/**
+ * Sun glitter. The lobe gives the sun's mean reflection over a pixel, which is what a pixel holding many glinting
+ * facets shows. A pixel close to the eye holds few, and each is a mirror image of the sun far brighter than white:
+ * the water there is dark with points of light, not evenly grey. So where the mean (as a share "expected" of one
+ * glint's brightness) is below one, that share of the cells of a grid fixed to the water is lit at one glint's
+ * brightness and the rest is dark: the same light on average. The cells are about a pixel across (two grid sizes
+ * blended, so no line shows where the size steps) and are dealt again six times a second: glitter twinkles.
+ */
+float glitter(vec2 world, float pixel, float expected) {
+  float level = log2(max(1.1 * pixel, 0.004));
+  float l0 = floor(level), lf = level - l0;
+  float t0 = floor(uGlintTime), tf = smoothstep(0.0, 1.0, uGlintTime - t0);
+  float lit = 0.0;
+  for (int i = 0; i < 2; i++) {
+    vec2 cell = mod(floor(world / exp2(l0 + float(i))), 4096.0);
+    float a = step(oHashLayer(cell, t0 + 300.0 * float(i)), expected);
+    float b = step(oHashLayer(cell, mod(t0 + 1.0, 256.0) + 300.0 * float(i)), expected);
+    lit += mix(a, b, tf) * (i == 0 ? 1.0 - lf : lf);
+  }
+  return lit / max(expected, 1e-3);
+}
 
 void main() {
   // ------------------------------------------------------------------ boat frame
@@ -336,7 +360,11 @@ void main() {
   if (uWakeRect.w > 0.5) {
     vec2 wuv = (vWorldPos.xz - uWakeRect.xy) * uWakeRect.z;
     if (all(greaterThan(wuv, vec2(0.0))) && all(lessThan(wuv, vec2(1.0)))) {
-      wake = texture(uWakeTex, wuv);
+      // The track is laid in a straight line by a boat on a steady course, but the water it lies on is not still:
+      // waves and eddies carry it about. Away from the hull the trail is read through a slow noise fixed in the
+      // water, so it wanders by a metre or so and its edges fray.
+      vec2 drift = (texture(uNoiseTex, vWorldPos.xz * 0.011).xy - 0.5) * 9.0 + (texture(uNoiseTex, vWorldPos.xz * 0.09).zw - 0.5) * 1.2;
+      wake = texture(uWakeTex, wuv + drift * smoothstep(5.0, 24.0, length(rel)) * uWakeRect.z);
       vec2 k0 = texture(uKelvinTex, wuv).rg;
       kelvinFoam = k0.r;
       // Most of the window is outside the Kelvin wedge: only fetch the slope taps inside it.
@@ -403,21 +431,28 @@ void main() {
   // ------------------------------------------------------------------- foam
   // Coverage comes from the two energetic cascades; the carving textures are only fetched where
   // there is foam to carve (most of the sea has none, and those taps dominate the shader's cost).
-  vec4 t0 = texture(uOceanTurb0, q / uOceanScales.x);
-  vec4 t1 = texture(uOceanTurb1, q / uOceanScales.y);
+  // The foam maps are a metre a texel: read a little off to one side, by a noise fixed in the water, and the outline
+  // of a patch is torn at the scale of a metre instead of following the texel grid's smooth blobs.
+  vec2 tear = texture(uNoiseTex, q * 0.13).zw;
+  vec2 qt = q + (tear - 0.5) * 1.5;
+  vec4 t0 = texture(uOceanTurb0, qt / uOceanScales.x);
+  // The fine cascade's map is 15 cm a texel, sharper than any foam edge: read it a mip level down.
+  vec4 t1 = texture(uOceanTurb1, qt / uOceanScales.y, 1.5);
   // Residual foam (accumulated) plus the crest that is breaking right now, which is the bright part.
   float rawFoam = max(t0.r, t1.r * 0.9);
-  float breakingNow = max(t0.b, t1.b * 0.8);
+  float breakingNow = max(t0.b, t1.b * 0.7);
   // Bubble plumes are local and short-lived: only the dense part under recent breaking counts.
-  float bubbles = smoothstep(0.05, 0.5, max(t0.g, t1.g)) * 0.6 + wake.g * 0.9;
+  float bubbles = smoothstep(0.05, 0.5, max(t0.g, t1.g)) * 0.6 + wake.g * 0.55;
   // The active cap sits on the upper, leeward face of the crest (fine-scale shape from the surface): a band along
   // the top of the wave, not the whole of its back.
   float crestMask = smoothstep(0.15, 0.75, vWaveY / max(uHs * 0.5, 0.05));
   float front = smoothstep(-0.02, 0.12, -dot(slope, uWindDirTo));
   // Coverage: only the tumbling front of a breaker is nearly solid, a band along the crest and not the whole patch
   // that is breaking a little; the foam it leaves behind is lace that thins as it decays.
-  float activeCap = smoothstep(0.10, 0.55, breakingNow) * crestMask * (0.4 + 0.6 * front);
-  float residual = 0.5 * smoothstep(0.05, 0.9, rawFoam);
+  float activeCap = smoothstep(0.08, 0.45, breakingNow) * crestMask * (0.4 + 0.6 * front);
+  // Old foam is patchy at the scale of a metre too (the same noise): a patch seen from too far to show its strands
+  // still has a broken outline and thin places.
+  float residual = 0.7 * smoothstep(0.03, 0.6, rawFoam) * clamp(0.35 + 1.3 * tear.x, 0.0, 1.25);
   float foamMask = (max(activeCap, residual) + 0.3 * min(activeCap, residual)) * (1.0 + max(gust, 0.0));
   float wakeDensity = max(max(wake.r, kelvinFoam), hullBreak);
   // Foam organises into streaks along the wind (Langmuir windrows), so every foam lookup is stretched
@@ -431,40 +466,43 @@ void main() {
     // Ridges of a meandering noise across the wind make continuous lines a few metres apart; a second,
     // coarser noise breaks them into patches tens of metres long.
     float meander = texture(uNoiseTex, qs * 0.0021).x - 0.5;
-    float n = texture(uNoiseTex, vec2(qs.x * 0.0035 + uOffFoamC.z, qs.y * 0.043 + meander * 0.9)).z;
+    float n = texture(uNoiseTex, vec2(qs.x * 0.0035 + uWindrowDrift, qs.y * 0.043 + meander * 0.9)).z;
     float line = smoothstep(0.86, 0.97, 1.0 - abs(n * 2.0 - 1.0));
     float patches = smoothstep(0.42, 0.7, texture(uNoiseTex, vec2(qs.x * 0.009, qs.y * 0.035) + 0.37).w);
     foamMask += line * patches * 0.3 * uStreaks;
   }
   float foam = 0.0, foamThin = 0.0, foamFine = 0.5;
   if (foamMask > 0.015 || wakeDensity > 0.015) {
-    vec2 stretch = vec2(0.22, 1.0);
-    vec4 fx1 = textureGrad(uFoamTex, qsr * 0.145 * stretch + uOffFoamA.zw, gx * 0.145 * stretch, gy * 0.145 * stretch);
-    vec4 fx2 = textureGrad(uFoamTex, qr * 0.62 + uOffFoamB.xy, ddx * 0.62, ddy * 0.62);
+    vec2 stretch = vec2(0.45, 1.0);
+    vec4 fx1 = textureGrad(uFoamTex, qsr * 0.145 * stretch + uOffFoamA.xy, gx * 0.145 * stretch, gy * 0.145 * stretch);
+    vec4 fx2 = textureGrad(uFoamTex, qr * 0.62 + uOffFoamA.zw, ddx * 0.62, ddy * 0.62);
     foamFine = fx2.g * 0.6 + fx1.g * 0.4;
     if (foamMask > 0.015) {
-      // Coverage, not paint: the local foam amount decides what fraction of a lace pattern (bubble-raft
-      // cells + wind streaks) turns white, so even dense foam keeps its holes and ragged edges.
-      vec4 fx0 = textureGrad(uFoamTex, qsr * 0.031 * stretch + uOffFoamA.xy, gx * 0.031 * stretch, gy * 0.031 * stretch);
-      float lace = fx2.r * 0.45 + fx1.a * 0.3 + fx0.a * 0.25;
-      // Past a few metres a pixel no longer resolves the lace, and its filtered value tends to the pattern's mean.
-      // Thresholding that would paint a whole patch white with a hard outline — an ice floe. So the threshold
-      // widens with the footprint into what the pixel really holds, the fraction of its lace that is white: old
-      // foam fades out toward its edges, and only a crest breaking right now stays dense. That part is boosted
+      // Coverage, not paint. Foam is marbled: strands along the level lines of two noise layers (one drawn out
+      // downwind), and the amount of foam decides how far from a strand the white reaches. A fresh cap is nearly
+      // solid with a torn edge; as it ages holes open in it until only the strands are left. z is the distance from
+      // the nearest strand in the noise's standard deviations, and reach(cover) is the distance within which the
+      // fraction "cover" of the surface lies, so a patch of foam amount c is white over the fraction c of its area.
+      float z = min(abs(fx1.b - 0.566), 1.3 * abs(fx2.b - 0.566)) / 0.128 * (0.8 + 0.4 * fx2.r);
+      float cover = clamp(foamMask - 0.04, 0.0, 0.97);
+      float reach = -0.6 * log(1.0 - cover);
+      float soft = 0.3 * reach + 0.03;
+      float marbled = 1.0 - smoothstep(reach - soft, reach + soft, z);
+      // Past a few metres a pixel no longer resolves the strands, and their filtered noise tends to its mean, which
+      // is "on a strand" everywhere: it would paint the whole patch white with a hard outline — an ice floe. There
+      // the pixel takes what it really holds, the white fraction of its area. A crest breaking right now is boosted
       // a little with distance, so that white horses carry to the horizon.
       float unresolved = smoothstep(0.02, 0.5, fpShade);
-      float cover = clamp(foamMask + 0.5 * activeCap * unresolved, 0.0, 0.74);
-      float edge = 1.0 - cover;
-      float soft = mix(0.06, 0.32, unresolved);
-      foam = smoothstep(edge - soft, edge + soft, lace + 0.12 * (fx2.g - 0.5));
-      foamThin = smoothstep(edge - 0.18 - soft, edge + 0.04, lace) * (1.0 - foam) * 0.7;
+      foam = mix(marbled, min(cover * (1.0 + 0.5 * activeCap), 1.0), unresolved);
+      // A thin veil of bubbles round the strands: it lifts the water's colour, it is not paint.
+      foamThin = (1.0 - smoothstep(reach, 2.2 * reach + 0.25, z)) * (1.0 - foam) * 0.6 * smoothstep(0.0, 0.2, cover);
     }
     if (wakeDensity > 0.015) {
       // Boat foam, lace not paint: the density decides what fraction of a bubble-raft pattern turns
       // white. The pattern is fixed in the water, so the hull slides through it and the foam streams aft.
-      vec4 wf = textureGrad(uFoamTex, qr * 0.23 + uOffFoamB.zw, ddx * 0.23, ddy * 0.23);
+      vec4 wf = textureGrad(uFoamTex, qr * 0.23 + uOffFoamB.xy, ddx * 0.23, ddy * 0.23);
       // A 4× finer layer keeps close-ups bubbly (cells of a few centimetres).
-      vec4 wn = textureGrad(uFoamTex, qr * 0.92 + uOffFoamC.xy, ddx * 0.92, ddy * 0.92);
+      vec4 wn = textureGrad(uFoamTex, qr * 0.92 + uOffFoamB.zw, ddx * 0.92, ddy * 0.92);
       float lace = wf.r * 0.42 + wn.r * 0.33 + fx2.r * 0.15 + wf.a * 0.1;
       float edge = 1.0 - clamp(wakeDensity * 0.95, 0.0, 0.95);
       float wakeFoam = smoothstep(edge - 0.05, edge + 0.05, lace);
@@ -537,6 +575,13 @@ void main() {
     vec2 tilt = (mat3(viewMatrix) * (N - vec3(0.0, 1.0, 0.0))).xy;
     vec4 mirrored = texture(uReflection, ruv + tilt * 0.11);
     float hold = 1.0 - smoothstep(0.3, 0.62, roughness);
+    // A mirror image survives only where it is taller than the smear of the ruffled surface (twice its slopes: some
+    // ±20° in 12 knots). Water seen at a shallow angle holds the images of things that stand as low over it, a
+    // degree or two for an island: mirrored there it would stand upside down under the horizon as in a pond. So
+    // the mirror fades as the line of sight flattens, sooner the more wind; the hull's own image, seen steeply,
+    // stays.
+    float seaSlope = sqrt(coxMunk(localWind));
+    hold *= smoothstep(0.5 * seaSlope, 1.5 * seaSlope, V.y);
     env = env * (1.0 - mirrored.a * hold) + mirrored.rgb * hold;
   }
   // Facets too small to resolve are seen tilted toward the eye (the ones facing away are hidden), so
@@ -550,12 +595,17 @@ void main() {
     vec3 H = normalize(L + V);
     float NoH = max(dot(N, H), 0.0);
     float VoH = max(dot(V, H), 1e-4);
-    // Widen the lobe by the sun's angular radius so calm water shows a disc, not a pin-prick.
+    // The slopes a pixel cannot resolve are Gaussian, widened by the sun's angular radius so calm water shows a
+    // disc, not a pin-prick.
     float aP = clamp(alpha + 0.0047, 0.0, 1.0);
-    float D = oGgxD(NoH, aP) * (alpha * alpha) / (aP * aP);
+    float D = oBeckmannD(NoH, aP * aP) * (alpha * alpha) / (aP * aP);
     float Vis = oSmithGgxCorrelated(NoV, max(NoL, 1e-4), alpha);
     float Fs = 0.02 + 0.98 * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);
     spec = sunRad * D * Vis * Fs * NoL;
+    // One glint: the sun mirrored by a wavelet's facet some 8 cm across, diluted over the pixel's patch of water.
+    float one = 1.2 * oLuminance(sunRad) * min(1.0, 0.006 / max(fpMinor * fpMajor, 1e-6));
+    float expected = oLuminance(spec) / max(one, 1e-4);
+    if (expected < 1.0) spec *= glitter(vWorldPos.xz, fpShade, expected);
   }
 
   vec3 color = mix(refracted, env, clamp(F, 0.0, 1.0)) + spec * (1.0 - 0.3 * gustUp);
@@ -594,7 +644,8 @@ void main() {
     int m = int(uDebugMode + 0.5);
     vec3 dbg = m == 1 ? wake.rgb : m == 2 ? vec3(foam, foamThin, rawFoam) : m == 3 ? N * 0.5 + 0.5
       : m == 4 ? vec3(roughness) : m == 5 ? vec3(max(gust, 0.0), max(-gust, 0.0), 0.0)
-      : m == 6 ? vec3(F) : vec3(kelvinFoam, 0.5 + kelvinSlope * 2.0);
+      : m == 6 ? vec3(F) : m == 7 ? vec3(kelvinFoam, 0.5 + kelvinSlope * 2.0)
+      : m == 8 ? spec : m == 9 ? env * clamp(F, 0.0, 1.0) : refracted * (1.0 - clamp(F, 0.0, 1.0));
     gl_FragColor = vec4(dbg, 1.0);
   }
   if (insideCutout) discard;

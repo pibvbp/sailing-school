@@ -39,8 +39,9 @@ void main() {
   // The turbulent wake spreads slowly sideways.
   vec4 nb = (prevAt(src + ivec2(1, 0)) + prevAt(src - ivec2(1, 0)) + prevAt(src + ivec2(0, 1)) + prevAt(src - ivec2(0, 1))) * 0.25;
   vec4 v = mix(c, nb, clamp(uDt * 0.7, 0.0, 0.25));
-  float foam = v.r * exp(-uDt / 2.4);
-  float bubbles = v.g * exp(-uDt / 9.0);
+  // White water is gone within a boat length; the fine bubbles under it linger for a few lengths more.
+  float foam = v.r * exp(-uDt / 1.6);
+  float bubbles = v.g * exp(-uDt / 6.0);
   float slick = v.b * exp(-uDt / 60.0);
 
   if (uMotion.z > 0.5) {
@@ -63,8 +64,8 @@ void main() {
     float stern = step(0.0, behind) * (1.0 - smoothstep(0.3, 2.5, behind)) * across;
     // Aerated rim where waves slap the topsides, even at rest.
     float wet = step(-0.1, outside) * (1.0 - smoothstep(0.0, 0.14, outside));
-    foam += ((bow * 1.4 + stern * 0.95) * work * work + wet * (0.12 + 0.35 * work)) * uDt * 2.2;
-    bubbles += (stern * work + bow * 0.4 * work) * uDt * 0.9;
+    foam += ((bow * 1.4 + stern * 0.7) * work * work + wet * (0.12 + 0.35 * work)) * uDt * 2.2;
+    bubbles += (stern * work + bow * 0.4 * work) * uDt * 0.75;
     slick += (stern * work + wet * 0.15) * uDt * 1.6;
   }
   oOut = vec4(clamp(foam, 0.0, 1.2), clamp(bubbles, 0.0, 1.0), clamp(slick, 0.0, 1.0), 0.0);

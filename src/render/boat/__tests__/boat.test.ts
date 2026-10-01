@@ -109,6 +109,22 @@ describe('BoatModel pose updates', () => {
     boat.dispose();
   });
 
+  it('the trimmers can be hidden per camera too, and only for a camera that asks', () => {
+    const boat = new BoatModel(tierSettings('high'));
+    const crew = boat.root.getObjectByName('crew') as THREE.Mesh;
+    const helm = boat.root.getObjectByName('helmsman') as THREE.Mesh;
+    const cam = new THREE.PerspectiveCamera();
+    const draw = (m: THREE.Mesh) => m.onBeforeRender(null as never, null as never, cam, m.geometry, m.material as THREE.Material, null as never);
+    cam.userData[BoatModel.HIDE_TRIMMERS] = true;
+    draw(crew);
+    draw(helm);
+    expect(crew.geometry.drawRange.count).toBe(0);
+    expect(helm.geometry.drawRange.count).toBe(Infinity);
+    crew.onAfterRender(null as never, null as never, cam, crew.geometry, crew.material as THREE.Material, null as never);
+    expect(crew.geometry.drawRange.count).toBe(Infinity);
+    boat.dispose();
+  });
+
   describe('spinnaker sheet and guy', () => {
     const ropeBuffer = (boat: BoatModel) =>
       (boat.root.getObjectByName('running-rigging') as THREE.Mesh).geometry.getAttribute('position') as THREE.BufferAttribute;

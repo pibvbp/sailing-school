@@ -249,8 +249,10 @@ export class App implements AppApi {
 
   setCamera(c: CameraKey): void {
     this.rig.setMode(c);
-    // At the helm the camera sits in the helmsman's head: hide him (his shadow stays).
+    // At the helm the camera sits in the helmsman's head, an arm's length behind the trimmers, whose backs would fill
+    // a quarter of the picture: the helm view shows the boat and her sails without the crew (their shadows stay).
     this.camera.userData[BoatModel.HIDE_HELMSMAN] = c === 'helm';
+    this.camera.userData[BoatModel.HIDE_TRIMMERS] = c === 'helm';
     this.hud.syncState({ camera: c });
   }
 

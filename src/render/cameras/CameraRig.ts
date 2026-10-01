@@ -279,8 +279,8 @@ export class CameraRig {
         break;
       }
       case 'helm': {
-        // Standing at the tiller just inboard of the crew on the windward rail, eyes ≈ 1.7 m above the waterline:
-        // their heads stay below and beside the picture instead of filling it.
+        // Standing at the tiller just inboard of the crew on the windward rail, eyes ≈ 1.7 m above the waterline.
+        // (The app does not draw the crew in this view: see App.setCamera.)
         this.local(f, HELM_EYE.x * this.side, HELM_EYE.y, HELM_EYE.z, this.pos);
         this.local(f, HELM_AIM.x * this.side, HELM_AIM.y, HELM_AIM.z, tmpT);
         cam.position.copy(this.pos);

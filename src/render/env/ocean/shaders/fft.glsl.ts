@@ -11,6 +11,8 @@
 // so spectral energy centred on direction k̂ produces waves travelling toward −k̂: the spectrum is
 // centred on the direction the wind comes FROM.
 
+import { HASH_GLSL } from './common.glsl';
+
 const COMMON = /* glsl */ `
 const float PI = 3.14159265358979;
 const float G = 9.81;
@@ -168,8 +170,15 @@ void main() {
  * Unpacks one cascade into displacement / derivatives and integrates its foam.
  *  disp  = (λDx, Dy, λDz, Jacobian)      deriv = (∂Dy/∂x, ∂Dy/∂z, λ∂Dx/∂x, λ∂Dz/∂z)
  *  turb  = (foam coverage, sub-surface bubbles, instantaneous breaking, 0)
+ *
+ * A linear sea has no breakers: a crest steep enough to "break" stays that steep for as long as it rides through its
+ * wave group (many seconds, tens of metres), over its whole width. A real whitecap is an event: a few metres of one
+ * crest spill for a second or two, the wave has spent its excess, and the crest runs on unbroken. `uGate` supplies
+ * the events: a noise field of cells a few metres across that travels downwind with the crests and changes within one
+ * lifetime. A crest breaks only where a cell is open.
  */
 export const ASSEMBLE_FRAG = /* glsl */ `
+${HASH_GLSL}
 uniform sampler2D uBuf0;
 uniform sampler2D uBuf1;
 uniform sampler2D uPrevTurb;
@@ -185,9 +194,27 @@ uniform float uFoamMul;
 uniform float uFoamDecay;
 uniform float uBubbleDecay;
 uniform float uDt;
+// Breaking events: xy = how far the cells have travelled (in cells), z = time in lifetimes, w = the noise level above
+// which a cell is open. uGateCells = cells across the tile (a whole number, so the pattern tiles with the cascade).
+uniform vec4 uGate;
+uniform float uGateCells;
+uniform float uTexels;
 layout(location = 0) out vec4 oDisp;
 layout(location = 1) out vec4 oDeriv;
 layout(location = 2) out vec4 oTurb;
+
+/** Value noise over (cell x, cell y, lifetime): periodic across the tile and every 64 lifetimes. */
+float gateNoise(vec3 x, float period) {
+  vec3 i = floor(x), f = fract(x);
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  float n[8];
+  for (int c = 0; c < 8; c++) {
+    vec3 o = vec3(float(c & 1), float((c >> 1) & 1), float(c >> 2));
+    n[c] = oHashLayer(mod(i.xy + o.xy, period), mod(i.z + o.z, 64.0));
+  }
+  return mix(mix(mix(n[0], n[1], u.x), mix(n[2], n[3], u.x), u.y), mix(mix(n[4], n[5], u.x), mix(n[6], n[7], u.x), u.y), u.z);
+}
+
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
   ivec2 src = ivec2(p.x + uOffset, p.y);
@@ -214,7 +241,13 @@ void main() {
   float lee = 0.55 + 0.45 * clamp(dot(grad / max(slope, 1e-4), uUpwind), -1.0, 1.0);
   float above = smoothstep(0.2, 1.2, dy * uInvSigma);
   float steep = smoothstep(uSteepBias, uSteepBias + 0.5, slope * uInvSlopeSigma) * lee * above;
-  float breaking = max(fold, steep);
+  // Where and when a crest may break. A second, finer layer that lives half as long frays the cell's outline, so the
+  // cap is a ragged piece of the crest and not the cell's own round shape.
+  vec2 cell = (vec2(p) + 0.5) / uTexels * uGateCells - uGate.xy;
+  float open = 0.75 * gateNoise(vec3(cell, uGate.z), uGateCells)
+    + 0.25 * gateNoise(vec3(cell * 3.0 + 7.3, uGate.z * 2.0 + 11.0), uGateCells * 3.0);
+  float gate = smoothstep(uGate.w, uGate.w + 0.07, open);
+  float breaking = max(fold, steep) * gate;
   float foam = prev.r * exp(-uDt * uFoamDecay) + breaking * uFoamMul * uDt;
   foam = max(foam - uDt * 0.012, 0.0);
   float bubbles = prev.g * exp(-uDt * uBubbleDecay) + breaking * uFoamMul * uDt * 0.55;
