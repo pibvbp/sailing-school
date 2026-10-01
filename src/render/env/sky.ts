@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { CloudLayer, cloudUniforms, patchCloudShader } from './clouds';
+import { DEFAULT_CLOUD_COVER } from './cloudField';
 import { CLOUD_DOME_GLSL, CLOUD_DOME_PARS_GLSL } from './cloudShaders';
 import { EnvironmentBaker, TEXELS_PER_UNIT, URGENT_BAKE_FACTOR } from './envBake';
 import { cloudQualityFor, VolumetricClouds, type CloudMirrorStats } from './volumetricClouds';
@@ -232,6 +233,8 @@ const METER_GRID = [-0.75, -0.25, 0.25, 0.75] as const;
 const SUN_BEHIND_CLOUD_TIME_S = 0.6;
 /** Rebaking the IBL costs a few ms: at most this often while the time of day is being animated. */
 const MIN_BAKE_INTERVAL_S = 0.5;
+/** Seconds the time of day must stay put before the clouds are shifted to open a gap round the new sun. */
+const GAP_SETTLE_S = 0.6;
 /** With volumetric clouds the reflections must follow the drifting clouds: rebake this often. */
 const CLOUD_BAKE_INTERVAL_S = 8;
 /** Sunlit cloud radiance per unit of the sun's irradiance / π (a white diffuser facing the sun = 1). */
@@ -269,6 +272,8 @@ export class SkySystem implements SkyState {
   cloudCover: number;
   /** Local solar time (hours). */
   hours = 17;
+  /** Seconds until the clouds are shifted to open a gap round the sun after a change of time; −1: none due. */
+  private gapDue = -1;
   /** Cloud layer: cover, drift and shape parameters (edit `clouds.params`, then call `refresh()`). */
   readonly clouds: CloudLayer;
   /**
@@ -330,7 +335,7 @@ export class SkySystem implements SkyState {
   constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, q: QualitySettings, options: SkyOptions = {}) {
     this.renderer = renderer;
     this.scene = scene;
-    this.cloudCover = THREE.MathUtils.clamp(options.cloudCover ?? 0.35, 0, 1);
+    this.cloudCover = THREE.MathUtils.clamp(options.cloudCover ?? DEFAULT_CLOUD_COVER, 0, 1);
     this.clouds = new CloudLayer(this.cloudCover);
     this.allowVolumetric = options.volumetricClouds !== false && VolumetricClouds.isSupported(renderer);
     const cloudQuality = this.allowVolumetric ? cloudQualityFor(q.tier) : null;
@@ -373,6 +378,7 @@ export class SkySystem implements SkyState {
       const e = this.eye;
       const s = this.sunDirection;
       this.volumetric.field.openSkyToward(e.x, e.y, e.z, s.x, s.y, s.z);
+      this.gapDue = -1;
       this.cloudSun = this.volumetric.sunTransmittance(e, s);
       this.sunIntensity = this.clearSunIntensity * this.cloudSun;
       // The first panorama is marched in one go so that the first frame and the first bake already show clouds.
@@ -395,7 +401,10 @@ export class SkySystem implements SkyState {
   }
 
   setTimeOfDay(hours: number): void {
-    this.hours = ((hours % 24) + 24) % 24;
+    const h = ((hours % 24) + 24) % 24;
+    // A new time puts the sun somewhere else in the sky: look for a gap there once the time has settled.
+    if (h !== this.hours) this.gapDue = GAP_SETTLE_S;
+    this.hours = h;
     const { elevation, azimuth } = sunPosition(this.hours);
     directionFromBearing(azimuth, elevation, this.sunDirection);
     this.refreshLighting();
@@ -490,6 +499,14 @@ export class SkySystem implements SkyState {
         baker.step();
         baked = true;
       }
+    }
+
+    if (this.gapDue >= 0 && (this.gapDue -= dt) < 0 && this.volumetric) {
+      // The time of day was changed and has stayed put: shift the clouds so the sun starts in a gap, as at start-up,
+      // and march the whole panorama at once (the light has just changed anyway).
+      this.volumetric.field.openSkyToward(this.eye.x, this.eye.y, this.eye.z, this.sunDirection.x, this.sunDirection.y, this.sunDirection.z);
+      this.volumetric.renderAll(this.eye, this.sunDirection);
+      this.envDirty = true;
     }
 
     let target: number;

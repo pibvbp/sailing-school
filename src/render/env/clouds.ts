@@ -2,6 +2,7 @@
 // instead of along the fixed diagonal of its `time * cloudSpeed` term, plus a CPU mirror of the same noise
 // so the sun light dims when the sun disc is behind a cloud.
 import * as THREE from 'three';
+import { DEFAULT_CLOUD_COVER } from './cloudField';
 
 export interface CloudParams {
   /** Sky.js `cloudCoverage`: fraction of sky above the carve threshold. */
@@ -154,7 +155,7 @@ export class CloudLayer {
   readonly offset = new THREE.Vector2();
   evolve = 0;
 
-  constructor(cover = 0.35) {
+  constructor(cover = DEFAULT_CLOUD_COVER) {
     this.cover = cover;
     this.params = cloudParamsForCover(cover);
   }

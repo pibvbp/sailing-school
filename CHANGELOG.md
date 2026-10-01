@@ -52,7 +52,8 @@ First public release.
   - An FFT ocean with whitecaps, gust patches, a wake, the boat's own waves and bow spray, adapted from ABYSSAL and
     wave-riders.
   - A physically based sky with ray-marched volumetric cumulus clouds that drift with the wind, dim the sun when
-    they cross it and are reflected in the sea, and a sun that follows the time of day.
+    they cross it and are reflected in the sea, and a sun that follows the time of day. The default sky is scattered
+    fair-weather cumulus that leave the boat in the sun most of the time.
   - Distant land with a lighthouse, and race marks that ride the waves.
   - A procedural boat with its crew, and translucent cloth sails with telltales, a windex and a burgee.
   - An AgX tone-mapped post chain, and four quality tiers with an automatic governor.

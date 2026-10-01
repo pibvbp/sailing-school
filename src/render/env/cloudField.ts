@@ -1,6 +1,7 @@
 // The cloud density field, on the CPU: parameters, the cover mapping, the panorama projection and a mirror of
 // the shader's density function (`cloudShaders.ts`). The GPU ray-marches this field into the sky panorama; the
-// CPU marches the same field toward the sun so the sun light dims exactly when a visible cloud covers it.
+// CPU marches the same field toward the sun so the sun light dims when a visible cloud covers it (fully for cloud
+// within a few kilometres along the sun's path, only partly for the distant cloud in front of a low sun).
 //
 // Keep `density()` in step with `CLOUD_DENSITY_GLSL`: same textures, same arithmetic, same order.
 import type { CloudNoise, NoiseMap, NoiseVolume } from './cloudNoise';
@@ -36,6 +37,11 @@ export interface CloudFieldParams {
 }
 
 export const CLOUD_BASE_M = 950;
+/**
+ * The sky's cloud cover unless a setting says otherwise: scattered fair-weather cumulus that leave the boat in the
+ * sun about two thirds of the time at 17:00 (see `sunTransmittance`).
+ */
+export const DEFAULT_CLOUD_COVER = 0.25;
 export const CLOUD_TOP_M = 2450;
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -243,7 +249,14 @@ export const OPAQUE_CLOUD_SUN = 0.06;
  * Share of the optical depth that takes light out of the beam for lighting purposes: cloud droplets scatter
  * mostly forward, so thin cloud dims the sun's light less than it dims the sharp image of the disc.
  */
-const BEAM_EXTINCTION = 0.6;
+const BEAM_EXTINCTION = 0.15;
+/**
+ * Cloud further than this along the sun's path (m) dims the sunlight at most to FAR_CLOUD_SUN. A low sun crosses
+ * tens of kilometres of the slab, so without this a sky with a third of it clouded would leave the boat in shade at
+ * every low sun; a distant cloud in front of the sun is seen to dim it, not to put out the light.
+ */
+export const SUN_REACH_M = 6000;
+export const FAR_CLOUD_SUN = 0.7;
 
 export class CloudField {
   params: CloudFieldParams;
@@ -258,7 +271,7 @@ export class CloudField {
   /** Scratch for the weather lookup: r, g, b. */
   private readonly w = [0, 0, 0];
 
-  constructor(noise: CloudNoise, cover = 0.35) {
+  constructor(noise: CloudNoise, cover = DEFAULT_CLOUD_COVER) {
     this.weather = noise.weather;
     this.shape = mipVolume(noise.shape);
     this.detail = mipVolume(noise.detail);
@@ -338,17 +351,22 @@ export class CloudField {
    * Optical depth along a ray from an observer at world (ox, oy, oz) through the slab, stepping as the shader's
    * primary march does (uniform steps between the shell crossings, level of detail from the step and distance).
    */
-  opticalDepth(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, steps: number = SUN_MARCH_STEPS): number {
+  opticalDepth(
+    ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, steps: number = SUN_MARCH_STEPS, from = 0, to = Infinity,
+  ): number {
     const p = this.params;
     if (dy <= 1e-4 || p.threshold >= 1) return 0;
     const cam = Math.min(Math.max(oy, 0), p.base - 1);
-    const t0 = shellDistance(dy, cam, p.base);
-    if (t0 >= CLOUD_MAX_DISTANCE_M) return 0;
-    const t1 = Math.min(shellDistance(dy, cam, p.top), CLOUD_MAX_DISTANCE_M);
+    const s0 = shellDistance(dy, cam, p.base);
+    if (s0 >= CLOUD_MAX_DISTANCE_M) return 0;
+    const s1 = Math.min(shellDistance(dy, cam, p.top), CLOUD_MAX_DISTANCE_M);
+    // `from` … `to`: only this stretch of the ray (metres from the observer).
+    const t0 = Math.max(s0, from), t1 = Math.min(s1, to);
+    if (t1 <= t0) return 0;
     const step = (t1 - t0) / steps;
-    // The noise level of detail is the picture's (the GPU's sub-step along this ray), not this march's: every
-    // caller sees the same field whatever its step count.
-    const drawnStep = (t1 - t0) / this.drawnSteps;
+    // The noise level of detail is the picture's (the GPU's sub-step along this ray through the whole slab), not
+    // this march's: every caller sees the same field whatever its step count or stretch.
+    const drawnStep = (s1 - s0) / this.drawnSteps;
     const shapeTexel = p.shapeTile / this.shapeTexels;
     const detailTexel = p.detailTile / this.detailTexels;
     let sum = 0;
@@ -368,9 +386,14 @@ export class CloudField {
     return Math.exp(-this.opticalDepth(ox, oy, oz, dx, dy, dz));
   }
 
-  /** Fraction of the direct sunlight that reaches an observer at world (ox, oy, oz). */
-  sunTransmittance(ox: number, oy: number, oz: number, sunX: number, sunY: number, sunZ: number): number {
-    return sunLightThrough(this.opticalDepth(ox, oy, oz, sunX, sunY, sunZ));
+  /**
+   * Fraction of the direct sunlight that reaches an observer at world (ox, oy, oz): cloud within SUN_REACH_M along
+   * the sun's path dims it fully, cloud further along it at most to FAR_CLOUD_SUN (see there).
+   */
+  sunTransmittance(ox: number, oy: number, oz: number, sunX: number, sunY: number, sunZ: number, steps: number = SUN_MARCH_STEPS): number {
+    const near = this.opticalDepth(ox, oy, oz, sunX, sunY, sunZ, steps, 0, SUN_REACH_M);
+    const far = this.opticalDepth(ox, oy, oz, sunX, sunY, sunZ, steps, SUN_REACH_M);
+    return sunLightThrough(near) * farCloudLight(far);
   }
 
   /**
@@ -380,7 +403,7 @@ export class CloudField {
    */
   openSkyToward(ox: number, oy: number, oz: number, sunX: number, sunY: number, sunZ: number): number {
     if (this.params.threshold >= 1 || sunY <= 0.02) return 1;
-    const light = (x: number, z: number): number => sunLightThrough(this.opticalDepth(x, oy, z, sunX, sunY, sunZ, 24));
+    const light = (x: number, z: number): number => this.sunTransmittance(x, oy, z, sunX, sunY, sunZ, 24);
     // The least sunlight within ≈ 800 m of a spot: over a minute of clear sun whichever way the wind blows.
     const score = (x: number, z: number): number => {
       let least = light(x, z);
@@ -439,6 +462,11 @@ export const FOOTPRINT_TEXELS = 1.5;
 export const DETAIL_LOD_CUTOFF = 4;
 /** The field starts fading at this share of `CLOUD_MAX_DISTANCE_M` and is gone at the full distance. */
 export const FADE_START = 0.7;
+
+/** Direct sunlight left by an optical depth of cloud beyond SUN_REACH_M (1 for clear air, never below FAR_CLOUD_SUN). */
+export function farCloudLight(opticalDepth: number): number {
+  return FAR_CLOUD_SUN + (1 - FAR_CLOUD_SUN) * Math.exp(-BEAM_EXTINCTION * Math.max(0, opticalDepth));
+}
 
 /** Direct sunlight left after an optical depth of cloud (monotonic, 1 for clear air, never below the floor). */
 export function sunLightThrough(opticalDepth: number): number {

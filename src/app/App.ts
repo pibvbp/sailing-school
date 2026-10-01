@@ -7,6 +7,7 @@ import { QualityGovernor } from '../render/core/quality';
 import { FrameTimer } from '../render/core/frameTimer';
 import type { QualitySettings, QualityTier } from '../render/core/types';
 import { SkySystem } from '../render/env/sky';
+import { DEFAULT_CLOUD_COVER } from '../render/env/cloudField';
 import { Lighting } from '../render/env/lighting';
 import { Land } from '../render/env/land';
 import { Marks } from '../render/env/marks';
@@ -152,7 +153,7 @@ export class App implements AppApi {
     this.quality = this.governor.settings;
     this.renderer.setPixelRatio(pixelRatioFor(this.quality));
 
-    this.sky = new SkySystem(this.renderer, this.scene, this.quality, { hours: this.hour, cloudCover: 0.35, volumetricClouds: !software });
+    this.sky = new SkySystem(this.renderer, this.scene, this.quality, { hours: this.hour, cloudCover: DEFAULT_CLOUD_COVER, volumetricClouds: !software });
     this.lighting = new Lighting(this.scene, this.sky, this.quality);
     this.land = new Land(this.scene, this.sky);
     this.marks = new Marks(this.scene);

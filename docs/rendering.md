@@ -130,6 +130,9 @@ the rudder stand out. The overlay half of it (the ghosted fins and the leeway pi
     It is filtered again every 8 s as the clouds drift, a strip per frame
     ([`envBake.ts`](../src/render/env/envBake.ts)), so no frame carries the whole bake.
   - **The sun dims** when a cloud crosses it: the CPU follows the same density field toward the sun every frame.
+    Thin cloud dims the light less than it hides the disc (droplets scatter forward), and cloud more than 6 km along
+    the sun's path, in front of a low sun, dims it at most to 70 %. A session, and every new time of day, starts with
+    the sun in a gap. The default cover (0.25) leaves the boat in the sun about two thirds of the time at 17:00.
   - **Fallback.** On the Low tier, and on GPUs without float render targets, a 2-D cloud layer painted into the sky
     shader draws instead ([`clouds.ts`](../src/render/env/clouds.ts)).
 - **Sun position** comes from the local solar time at a mid-latitude site (45°) in late summer: 17:00 puts the sun

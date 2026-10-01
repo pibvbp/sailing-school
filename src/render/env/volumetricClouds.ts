@@ -458,7 +458,7 @@ export class VolumetricClouds {
         if (Math.hypot(u - 0.5, v - 0.5) * 2 > disc * 0.97) continue;
         panoDirection(u, v, disc, dir);
         const gpu = THREE.DataUtils.fromHalfFloat(texels[(j * size + i) * 4 + 3]!);
-        // The march exactly as the per-frame sun light runs it.
+        // The march the sun's disc is judged by (the per-frame light runs it too, with the reach rule on top).
         const cpu = this.field.viewTransmittance(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z);
         n++;
         sumAbs += Math.abs(gpu - cpu);

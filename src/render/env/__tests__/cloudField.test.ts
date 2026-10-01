@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { sunPosition } from '../sky';
 import { cloudNoise } from '../cloudNoise';
 import {
-  CLOUD_BASE_M, CLOUD_MAX_DISTANCE_M, CLOUD_TOP_M, CloudField, EARTH_RADIUS_M, FADE_START, OPAQUE_CLOUD_SUN, cloudAreaFraction,
+  CLOUD_BASE_M, CLOUD_MAX_DISTANCE_M, CLOUD_TOP_M, CloudField, DEFAULT_CLOUD_COVER, EARTH_RADIUS_M, FADE_START, FAR_CLOUD_SUN,
+  OPAQUE_CLOUD_SUN, SUN_REACH_M, cloudAreaFraction, farCloudLight,
   cloudFieldForCover, panoDirection, panoDisc, panoUv, rayAltitude, shellDistance, sunLightThrough,
 } from '../cloudField';
 
@@ -140,13 +142,17 @@ describe('sun transmittance', () => {
     expect(sunLightThrough(0)).toBe(1);
     expect(sunLightThrough(-1)).toBe(1);
     let last = 1;
-    for (let tau = 0.1; tau < 40; tau += 0.1) {
+    for (let tau = 0.1; tau < 150; tau += 0.1) {
       const t = sunLightThrough(tau);
       expect(t).toBeLessThan(last);
       expect(t).toBeGreaterThanOrEqual(OPAQUE_CLOUD_SUN);
       last = t;
     }
-    expect(sunLightThrough(40)).toBeCloseTo(OPAQUE_CLOUD_SUN, 6);
+    expect(sunLightThrough(150)).toBeCloseTo(OPAQUE_CLOUD_SUN, 6);
+    // Distant cloud along a low sun's path dims the light only down to its own floor.
+    expect(farCloudLight(0)).toBe(1);
+    expect(farCloudLight(150)).toBeCloseTo(FAR_CLOUD_SUN, 6);
+    expect(farCloudLight(3)).toBeGreaterThan(sunLightThrough(3));
   });
 
   it('marches the real slant path: the same optical depth as a brute-force walk through the density', () => {
@@ -347,5 +353,80 @@ describe('ray geometry', () => {
         expect(Math.abs(rayAltitude(t, dy, 3) - alt)).toBeLessThan(1);
       }
     }
+  });
+});
+
+// ---- sunshine at the default sky ---------------------------------------------------------------------------------
+
+/**
+ * Sail for `minutes` in 12 kn under the default sky at local time `hours`, from `runs` places in the weather map:
+ * the share of the time in sun (> 0.8 of the clear-sky light) and in shade (< 0.25), and the shade spells (minutes).
+ * The clouds drift as the app moves them (1.8 × the surface wind, veered 20°); the boat sails across at 3 m/s.
+ */
+function sunshine(hours: number, runs = 24, minutes = 40): { sunny: number; shaded: number; spells: number[]; light: number[] } {
+  const { elevation, azimuth } = sunPosition(hours);
+  const h = Math.cos(elevation);
+  const sx = Math.sin(azimuth) * h, sy = Math.sin(elevation), sz = -Math.cos(azimuth) * h;
+  const field = new CloudField(noise, DEFAULT_CLOUD_COVER);
+  const from = (270 * Math.PI) / 180, speed = 12 * 0.514444 * 1.8;
+  const wx = -Math.sin(from), wz = Math.cos(from);
+  let sunny = 0, shaded = 0, n = 0;
+  const spells: number[] = [];
+  const light: number[] = [];
+  const dt = 2;
+  for (let r = 0; r < runs; r++) {
+    field.drift.x = 48_000 * ((r * 0.618) % 1);
+    field.drift.z = 48_000 * ((r * 0.382 + 0.17) % 1);
+    let spell = 0;
+    for (let t = 0; t < minutes * 60; t += dt) {
+      field.drift.x += wx * speed * dt;
+      field.drift.z += wz * speed * dt;
+      const L = field.sunTransmittance(0, 2, -3 * t, sx, sy, sz, 48);
+      light.push(L);
+      n++;
+      if (L > 0.8) sunny++;
+      if (L < 0.25) { shaded++; spell += dt; } else if (spell > 0) { spells.push(spell / 60); spell = 0; }
+    }
+    if (spell > 0) spells.push(spell / 60);
+  }
+  return { sunny: sunny / n, shaded: shaded / n, spells, light };
+}
+
+describe('sunshine at the default sky (12 kn)', () => {
+  for (const hours of [13, 17]) {
+    it(`${hours}:00: in the sun at least 60 % of the time, in shade at most 25 %, rarely for long`, () => {
+      const { sunny, shaded, spells } = sunshine(hours);
+      expect(sunny).toBeGreaterThanOrEqual(0.6);
+      expect(shaded).toBeLessThanOrEqual(0.25);
+      // Under a cluster of cumulus the shade can last a while, as it does at sea — but at most about once an hour
+      // for more than 4 minutes, and never for more than 12.
+      const hoursSailed = (24 * 40) / 60;
+      expect(spells.filter((m) => m > 4).length / hoursSailed).toBeLessThanOrEqual(1);
+      expect(Math.max(0, ...spells)).toBeLessThanOrEqual(12);
+    });
+  }
+
+  it('golden hour (18:45): distant cloud in front of the low sun dims the light but never puts it out', () => {
+    const { sunny, shaded, light } = sunshine(18.75);
+    expect(shaded).toBe(0);
+    expect(Math.min(...light)).toBeGreaterThanOrEqual(FAR_CLOUD_SUN * 0.999);
+    expect(sunny).toBeGreaterThanOrEqual(0.3);
+  });
+
+  it('a cloud close along the sun\'s path still shades the boat fully: the floor is for distant cloud only', () => {
+    // Midday: the whole slab lies within the reach, so the light is exactly the full march's.
+    const { elevation, azimuth } = sunPosition(13);
+    const h = Math.cos(elevation);
+    const sun = [Math.sin(azimuth) * h, Math.sin(elevation), -Math.cos(azimuth) * h] as const;
+    expect(CLOUD_TOP_M / sun[1]).toBeLessThan(SUN_REACH_M);
+    const field = new CloudField(noise, DEFAULT_CLOUD_COVER);
+    let darkest = 1;
+    for (let i = 0; i < 400; i++) {
+      const x = 120 * i, z = 37 * i;
+      const L = field.sunTransmittance(x, 2, z, ...sun);
+      expect(L).toBeCloseTo(sunLightThrough(field.opticalDepth(x, 2, z, ...sun)), 9);
+      darkest = Math.min(darkest, L);
+    }
+    expect(darkest).toBeLessThan(0.25);
   });
 });
