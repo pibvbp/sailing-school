@@ -64,6 +64,14 @@ const EE = 1000;
 const RAYLEIGH_ZENITH_LENGTH = 8.4e3;
 const MIE_ZENITH_LENGTH = 1.25e3;
 const SKY_BIAS = [0, 0.0003, 0.00075] as const;
+/**
+ * The model's low sun leaves a band a few degrees up, between the orange of the horizon and the blue above, where
+ * green is the strongest channel, or level with red over little blue: a lime sky between the dusk clouds. A real
+ * sky is pale there. Whatever green stands above both blue and 0.8 of red is taken down and shared out to them (the
+ * shader patch below does the same).
+ */
+const GREEN_TO_PALE = [0.45, -0.7, 0.45] as const;
+const GREEN_OVER_RED = 0.8;
 
 export class PreethamModel {
   readonly sun = new THREE.Vector3(0, 1, 0);
@@ -122,7 +130,8 @@ export class PreethamModel {
       lin *= 1 + (Math.pow(scatter * fex[i]!, 0.5) - 1) * blend;
       rgb[i] = (lin + 0.1 * fex[i]!) * 0.04 + SKY_BIAS[i]!;
     }
-    return out.setRGB(rgb[0]!, rgb[1]!, rgb[2]!, THREE.LinearSRGBColorSpace);
+    const green = Math.max(rgb[1]! - Math.max(GREEN_OVER_RED * rgb[0]!, rgb[2]!), 0);
+    return out.setRGB(rgb[0]! + GREEN_TO_PALE[0] * green, rgb[1]! + GREEN_TO_PALE[1] * green, rgb[2]! + GREEN_TO_PALE[2] * green, THREE.LinearSRGBColorSpace);
   }
 }
 
@@ -136,6 +145,13 @@ type SkyShaderDef = { uniforms: Record<string, THREE.IUniform>; vertexShader: st
 
 /** Patches on top of the cloud patches: adjustable in-scatter exponent and the distant sea below the horizon. */
 const SKY_PATCHES: Array<[string, string]> = [
+  [
+    'vec3 texColor = ( Lin + L0 ) * 0.04 + sundiscColor + vec3( 0.0, 0.0003, 0.00075 );',
+    `vec3 clearSky = ( Lin + L0 ) * 0.04 + vec3( 0.0, 0.0003, 0.00075 );
+			// No lime band under a low sun (see GREEN_TO_PALE).
+			clearSky += max( clearSky.g - max( ${GREEN_OVER_RED.toFixed(2)} * clearSky.r, clearSky.b ), 0.0 ) * vec3( ${GREEN_TO_PALE.map((v) => v.toFixed(2)).join(', ')} );
+			vec3 texColor = clearSky + sundiscColor;`,
+  ],
   [
     '* ( 1.0 - Fex ), vec3( 1.5 ) );',
     '* ( 1.0 - Fex ), vec3( scatterExponent ) );',

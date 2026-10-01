@@ -76,7 +76,7 @@ export class Ocean {
     this.reflection.setQuality(q.reflections);
     this.oceanMesh.beforeDraw = (r, s, camera) => {
       const drawn = (this.reflectFor === null || this.reflectFor === camera) && this.reflection.render(r, s, camera);
-      this.surface.setReflection(drawn ? this.reflection.texture : null, this.reflection.viewProjection);
+      this.surface.setReflection(drawn ? this.reflection.texture : null, this.reflection.viewProjection, this.reflection.texelsPerRadian);
     };
   }
 

@@ -97,6 +97,7 @@ export class OceanSurfaceMaterial {
       uReflection: { value: null },
       uReflectionMatrix: { value: new THREE.Matrix4() },
       uReflectionOn: { value: 0 },
+      uReflectionScale: { value: 1 },
     };
     this.envEquirect.texture.wrapS = THREE.RepeatWrapping;
     this.envPass = new FullScreenPass(ENV_EQUIRECT_BAKE, {
@@ -255,8 +256,9 @@ export class OceanSurfaceMaterial {
   }
 
   /** The mirrored-scene texture and its camera for the current draw (null texture = off). */
-  setReflection(texture: THREE.Texture | null, viewProjection: THREE.Matrix4): void {
+  setReflection(texture: THREE.Texture | null, viewProjection: THREE.Matrix4, texelsPerRadian = 1): void {
     this.u['uReflection']!.value = texture;
+    this.u['uReflectionScale']!.value = texelsPerRadian;
     this.u['uReflectionOn']!.value = texture ? 1 : 0;
     (this.u['uReflectionMatrix']!.value as THREE.Matrix4).copy(viewProjection);
     this.material.uniformsNeedUpdate = true;

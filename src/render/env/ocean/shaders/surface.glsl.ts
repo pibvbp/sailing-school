@@ -280,6 +280,7 @@ uniform float uDebugMode; // 0 off, 1 wake trail, 2 foam, 3 normal, 4 roughness,
 uniform sampler2D uReflection;
 uniform mat4 uReflectionMatrix;   // mirror camera view-projection
 uniform float uReflectionOn;
+uniform float uReflectionScale;   // texels of the mirror image per radian of view
 ${BRDF_GLSL}
 ${HASH_GLSL}
 ${ENV_LOOKUP_GLSL}
@@ -573,7 +574,12 @@ void main() {
     vec4 rc = uReflectionMatrix * vec4(vWorldPos, 1.0);
     vec2 ruv = rc.xy / max(rc.w, 1e-4) * 0.5 + 0.5;
     vec2 tilt = (mat3(viewMatrix) * (N - vec3(0.0, 1.0, 0.0))).xy;
-    vec4 mirrored = texture(uReflection, ruv + tilt * 0.11);
+    // The slopes the pixel cannot resolve smear the image over twice their angle up and down, and sideways by that
+    // times the sine of the angle the water is seen at. The image is read as many texels wide as the sideways smear
+    // (the waves' own tilt above does the rest): a sail lies on ruffled water as a soft streak, not as a sharp-edged
+    // copy broken into blotches.
+    float smear = 2.0 * sqrt(mssUnres) * uReflectionScale * clamp(V.y, 0.1, 1.0);
+    vec4 mirrored = textureLod(uReflection, ruv + tilt * 0.11, log2(max(smear, 1.0)));
     float hold = 1.0 - smoothstep(0.3, 0.62, roughness);
     // A mirror image survives only where it is taller than the smear of the ruffled surface (twice its slopes: some
     // ±20° in 12 knots). Water seen at a shallow angle holds the images of things that stand as low over it, a

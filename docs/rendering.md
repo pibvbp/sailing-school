@@ -76,7 +76,8 @@ ends exactly on the horizon. The shading combines:
 - haze toward the horizon;
 - on High and Ultra, a planar reflection of the boat and marks, distorted by the waves. The teaching overlays are kept
   out of it. It fades where the water is seen at a shallow angle, sooner the more wind: a ruffled sea smears an image
-  over some ±20°, so the hull beside you is mirrored and an island on the horizon is not.
+  over some ±20°, so the hull beside you is mirrored and an island on the horizon is not. The image is mipmapped and
+  read as wide as the ripples smear it sideways, so a sail lies on the water as a soft streak.
 
 **Wind on the water.**
 
@@ -127,6 +128,8 @@ the rudder stand out. The overlay half of it (the ghosted fins and the leeway pi
 ## Sky, sun and light
 
 - **Sky** ([`sky.ts`](../src/render/env/sky.ts)). The clear sky is three's `Sky.js`, a Preetham daylight model.
+  Under a low sun the model leaves a lime band between the orange horizon and the blue above; the green that stands
+  above both blue and most of the red is taken down and shared out to them, so the band is pale, as in a real dusk.
 - **Clouds** ([`volumetricClouds.ts`](../src/render/env/volumetricClouds.ts),
   [`cloudField.ts`](../src/render/env/cloudField.ts), [`cloudShaders.ts`](../src/render/env/cloudShaders.ts),
   [`cloudNoise.ts`](../src/render/env/cloudNoise.ts)). Fair-weather cumulus, ray-marched through a real volume:

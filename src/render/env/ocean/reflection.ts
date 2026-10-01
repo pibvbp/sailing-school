@@ -35,6 +35,8 @@ export class PlanarReflection {
   clipY = -0.5;
   /** View-projection of the last mirror camera (x/y are unaffected by the oblique clip). */
   readonly viewProjection = new THREE.Matrix4();
+  /** Texels of the mirror image per radian of view (for the sea's blur of it), from the last render. */
+  texelsPerRadian = 1;
 
   constructor(private readonly exclude: THREE.Object3D[]) {}
 
@@ -60,6 +62,7 @@ export class PlanarReflection {
     if (_camPos.y <= this.mirrorY + 0.05) return false;
     this.ensureTarget(renderer);
     this.mirrorCamera(cam);
+    this.texelsPerRadian = this.target!.height / THREE.MathUtils.degToRad(cam.fov);
 
     // Only what stands on the water: hide the sea, our backdrop and any sky dome (three's Sky, or the
     // app's dome named 'sky'); the sky itself is reflected from the environment map.
@@ -109,7 +112,10 @@ export class PlanarReflection {
     const w = Math.max(1, Math.round(_size.x * this.scale)), h = Math.max(1, Math.round(_size.y * this.scale));
     if (this.target && this.target.width === w && this.target.height === h) return;
     this.target?.dispose();
-    this.target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true });
+    // Mipmapped: a ruffled sea smears a mirror image, and the surface shader reads it that many texels wide.
+    this.target = new THREE.WebGLRenderTarget(w, h, {
+      type: THREE.HalfFloatType, depthBuffer: true, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter,
+    });
     this.target.texture.name = 'oceanReflection';
   }
 
