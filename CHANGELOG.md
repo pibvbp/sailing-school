@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-09-30
+## [1.0.0] - 2026-10-01
 
 First public release.
 
@@ -49,8 +49,8 @@ First public release.
 - **Five cameras:** chase, helm, top (wind at the top of the screen), sail view and free. They keep the boat in the
   part of the window that the panels leave free, on a phone as well.
 - **Graphics.**
-  - An FFT ocean with whitecaps, gust patches, a wake, the boat's own waves and bow spray, adapted from ABYSSAL and
-    wave-riders.
+  - An FFT ocean with whitecaps that break and fade, sun glitter, gust patches, a wake, the boat's own waves and bow
+    spray, adapted from ABYSSAL and wave-riders.
   - A physically based sky with ray-marched volumetric cumulus clouds that drift with the wind, dim the sun when
     they cross it and are reflected in the sea, and a sun that follows the time of day. The default sky is scattered
     fair-weather cumulus that leave the boat in the sun most of the time.

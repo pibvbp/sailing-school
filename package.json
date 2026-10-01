@@ -1,7 +1,7 @@
 {
   "name": "sailing-school",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Interactive 3D sailing school: see how wind drives a sailboat.",
   "type": "module",
   "license": "MIT",
