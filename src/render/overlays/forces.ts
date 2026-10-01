@@ -37,12 +37,12 @@ const M_PER_N = 1 / 300;
 const LONGEST = 5.2;
 /**
  * A reduced set of pieces is the subject of the picture, and its forces may be small (a lone mainsail in 10 kn makes
- * ~300 N): a larger scale, set by the largest force seen lately rather than the current one — so an arrow visibly
- * shrinks when the sail luffs and grows back when it is trimmed, instead of the scale following it.
+ * ~300 N): a larger scale, set by the largest of the drawn forces seen since the set was chosen and held for as long
+ * as it stays chosen — so an arrow visibly shrinks when the sail luffs or is depowered and grows back when it is
+ * trimmed, instead of the scale following it.
  */
 const M_PER_N_FOCUS = 1 / 55;
 const LONGEST_FOCUS = 3.6;
-const PEAK_HOLD_S = 40;
 /**
  * The lift/drag picture: the apparent-wind arrow is this long per m/s of wind and stops `GAUGE_R` short of the luff;
  * the chord line runs on that far ahead of the luff, and the angle-of-attack arc sits between the two.
@@ -154,11 +154,31 @@ export function aeroSplit(s: SimSnapshot, out: AeroSplit): AeroSplit {
   return out;
 }
 
+/** Largest force among the arrows a reduced set draws (N, at least 1); the righting couple has a fixed length. */
+function drawnMax(s: SimSnapshot, m: number, onSail: boolean): number {
+  const f = s.forces;
+  let n = 1;
+  if (m & BIT.total) n = Math.max(n, hyp(f.drive, f.sideForce));
+  if (m & BIT.drive) n = Math.max(n, Math.abs(f.drive));
+  if (m & BIT.heel) n = Math.max(n, Math.abs(f.sideForce));
+  if (m & BIT.liftDrag || onSail) {
+    // A sail's lift and drag are each no longer than its horizontal force plus its share of the induced drag.
+    const c = Math.cos(s.boat.heel), sn = Math.sin(s.boat.heel);
+    for (const sail of [s.sails.main, s.sails.jib, s.sails.spinnaker]) {
+      if (sail.set) n = Math.max(n, hyp(sail.force.x, sail.force.y * c - sail.force.z * sn));
+    }
+  }
+  if (m & BIT.keel) n = Math.max(n, hyp(f.keel.force.x, f.keel.force.y));
+  if (m & BIT.rudder) n = Math.max(n, hyp(f.rudder.force.x, f.rudder.force.y));
+  if (m & BIT.resistance) n = Math.max(n, f.resistance);
+  return n;
+}
+
 export class ForceOverlay {
   private scale = M_PER_N;
   private mask = ALL;
   private reduced = false;
-  /** Largest force seen lately (N): sets the scale of a reduced picture. */
+  /** Largest drawn force (N) since the reduced set was chosen: sets its scale, and never decays. */
   private peak = 0;
   /** Just switched on or re-configured: take the scale at once instead of easing to it. */
   private fresh = true;
@@ -243,7 +263,7 @@ export class ForceOverlay {
     const biggest = Math.max(Math.sqrt(fA.x * fA.x + fA.y * fA.y + fA.z * fA.z), m & BIT.keel ? hyp(f.keel.force.x, f.keel.force.y) : 0, 1);
     let target: number;
     if (this.reduced) {
-      this.peak = Math.max(biggest, this.peak * Math.exp(-dt / PEAK_HOLD_S));
+      this.peak = Math.max(this.peak, drawnMax(s, m, this.figureWanted));
       target = Math.min(M_PER_N_FOCUS, LONGEST_FOCUS / this.peak) * viewScale;
     } else {
       target = Math.min(M_PER_N, LONGEST / biggest) * viewScale;
@@ -332,6 +352,7 @@ export class ForceOverlay {
   }
 
   hide(): void {
+    this.peak = 0;
     const L = this.labels;
     for (const l of [L.total, L.drive, L.heel, L.keel, L.rudder, L.resistance, L.windage, L.weight, L.buoyancy, L.helm]) l.hide();
     this.hideSails();

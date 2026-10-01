@@ -6,7 +6,8 @@ import * as THREE from 'three';
 import { OVERLAY_KEYS, type ForcePart } from '../../../lessons/types';
 import { tierSettings } from '../../core/types';
 import { Overlays } from '../Overlays';
-import { defaultSafeInsets, type ArrowSource, type LabelLayer, type PlacedTag } from '../labels';
+import { LabelLayer, defaultSafeInsets, type ArrowSource, type PlacedTag } from '../labels';
+import { DEG } from '../../../shared/math';
 import {
   TAG_FIXED, TAG_OFFSET, TAG_RADIAL, TAG_TIP, TagLayout, newTagBox, rectsOverlap, segmentHitsRect,
   type ScreenRect, type TagBox, type TagMode,
@@ -121,7 +122,7 @@ describe('tag layout', () => {
     expect(free.y).toBeCloseTo(300 - 10, 6);
   });
 
-  it('holds a displaced tag in place while its spot is free, and lets it return once the better spot has been free for a moment', () => {
+  it('holds a displaced tag in place while its spot is free, and lets it return once the better spot has been free longer than a wave period', () => {
     const L = layout();
     const blocker = tag(700, 400, 140, TAG_OFFSET, { dx: 0, dy: -18 });
     const t = tag(705, 402, 140, TAG_OFFSET, { dx: 0, dy: -18 });
@@ -132,13 +133,72 @@ describe('tag layout', () => {
     // The blocker goes away: the tag does not snap back at once …
     L.place([t], 1, 1 / 60);
     expect(t.slot).toBe(displaced);
-    // … but does within two seconds.
-    for (let i = 0; i < 120; i++) L.place([t], 1, 1 / 60);
+    // … nor while the boat rocks once (the hold is longer than a wave period) …
+    for (let i = 0; i < 4 * 60; i++) L.place([t], 1, 1 / 60);
+    expect(t.slot).toBe(displaced);
+    // … but does within five seconds.
+    for (let i = 0; i < 60; i++) L.place([t], 1, 1 / 60);
     expect(t.slot).toBe(0);
     // A place that becomes blocked is left immediately.
     L.place([blocker, t], 2, 1 / 60);
     expect(t.slot).toBeGreaterThan(0);
     expectLegible([blocker, t], L);
+  });
+
+  it('a tag in place rides with its anchor, even where the fan direction swings round (anchor near the focus)', () => {
+    const L = layout();
+    L.clearR = 0;
+    // Displaced by a blocker onto the fan, anchored a few px from the focus: "away from the focus" is ill-defined.
+    const blocker = tag(L.fx + 3, L.fy - 20, 160, TAG_OFFSET, { dx: 0, dy: -18 });
+    const t = tag(L.fx + 3, L.fy - 2, 120, TAG_OFFSET, { dx: 0, dy: -18 });
+    L.place([blocker, t], 2, 1 / 60);
+    expect(t.shown).toBe(true);
+    const ox = t.x - t.sx, oy = t.y - t.sy;
+    // The anchor circles the focus by 4 px (the boat rocking): the tag keeps its offset from it.
+    for (let i = 0; i < 600; i++) {
+      const a = (i / 60) * 2;
+      t.sx = L.fx + 4 * Math.cos(a); t.sy = L.fy + 4 * Math.sin(a);
+      blocker.sx = t.sx; blocker.sy = t.sy - 18;
+      L.place([blocker, t], 2, 1 / 60);
+      expect(t.shown).toBe(true);
+      expect(Math.hypot(t.x - t.sx - ox, t.y - t.sy - oy), `frame ${i}`).toBeLessThan(1e-6);
+    }
+  });
+
+  it('edges a tag in place aside when another tag sways into it, instead of sending it elsewhere', () => {
+    const L = layout();
+    const a = tag(700, 400, 120, TAG_OFFSET, { dx: 0, dy: 0 });
+    const b = tag(700, 426, 120, TAG_OFFSET, { dx: 0, dy: 0 });
+    L.place([a, b], 2, 1 / 60);
+    expect(b.slot).toBe(0);
+    // `a`'s anchor sways 5 px down: `b` steps down with it rather than jumping.
+    a.sy += 5;
+    L.place([a, b], 2, 1 / 60);
+    expect(b.shown).toBe(true);
+    expect(b.slot).toBe(0);
+    expect(rectsOverlap(a, b)).toBe(false);
+    // It was at y = 416; a moved 5 px down, so b moves down by a few px — no more.
+    expect(b.y - 416).toBeGreaterThan(0);
+    expect(b.y - 416).toBeLessThanOrEqual(5);
+  });
+
+  it('a tag that lost its place shows again only once a new one has stayed free for a while, and stops searching every frame meanwhile', () => {
+    const L = layout();
+    L.setSafe(400, 300, { top: 0, right: 0, bottom: 0, left: 0 });
+    L.hasFocus = false;
+    // A tag as wide as the safe area: a second one of the same size has room only when the first is gone.
+    const big = tag(200, 150, 400, TAG_OFFSET, { h: 300, dx: 0, dy: 0 });
+    const t = tag(200, 150, 120, TAG_OFFSET, { dx: 0, dy: 0 });
+    L.place([t], 1, 1 / 60);
+    expect(t.shown).toBe(true);
+    L.place([big, t], 2, 1 / 60);
+    expect(t.shown).toBe(false);
+    expect(t.retry).toBeGreaterThan(0);
+    // The blocker goes: the tag waits before coming back.
+    for (let i = 0; i < 60; i++) L.place([t], 1, 1 / 60);
+    expect(t.shown).toBe(false);
+    for (let i = 0; i < 120; i++) L.place([t], 1, 1 / 60);
+    expect(t.shown).toBe(true);
   });
 
   it('stays legible on random crowds in every mode, in both window sizes (and hides what cannot fit)', () => {
@@ -182,6 +242,17 @@ describe('tag layout', () => {
     }
   });
 
+  it('hides a tag wider than the safe area instead of letting it overhang', () => {
+    const L = new TagLayout();
+    L.setSafe(300, 600, { top: 0, right: 0, bottom: 0, left: 0 });
+    const wide = tag(150, 300, 320, TAG_OFFSET);
+    const fits = tag(150, 200, 120, TAG_OFFSET);
+    L.place([wide, fits], 2, 1 / 60);
+    expect(wide.shown).toBe(false);
+    expect(fits.shown).toBe(true);
+    expectLegible([wide, fits], L);
+  });
+
   it('keeps a usable safe area whatever insets it is given', () => {
     const L = new TagLayout();
     L.setSafe(800, 600, { top: 500, right: 500, bottom: 500, left: 500 });
@@ -204,11 +275,11 @@ describe('tag layout', () => {
 
 // ---- the real overlays -----------------------------------------------------------------------------------------
 
-/** The app's chase camera (CameraRig: 17 m astern, yaw 0.45, pitch 0.22, 50° lens) for a snapshot. */
-function chaseCamera(heading: number, boat: THREE.Vector3, aspect: number): THREE.PerspectiveCamera {
+/** The app's chase camera (CameraRig: `dist` m astern, yaw 0.45, pitch 0.22, 50° lens) for a snapshot. */
+function chaseCamera(heading: number, boat: THREE.Vector3, aspect: number, dist = 17): THREE.PerspectiveCamera {
   const cam = new THREE.PerspectiveCamera(50, aspect, 0.1, 40000);
-  const a = heading + Math.PI + 0.45, horiz = 17 * Math.cos(0.22);
-  cam.position.set(boat.x + Math.sin(a) * horiz, 2 + 17 * Math.sin(0.22), boat.z - Math.cos(a) * horiz);
+  const a = heading + Math.PI + 0.45, horiz = dist * Math.cos(0.22);
+  cam.position.set(boat.x + Math.sin(a) * horiz, 2 + dist * Math.sin(0.22), boat.z - Math.cos(a) * horiz);
   cam.lookAt(boat.x, 3.2, boat.z);
   cam.updateMatrixWorld();
   return cam;
@@ -281,6 +352,89 @@ describe('overlay tags against a real simulation', () => {
       }
     });
   }
+
+  // The boat rocks (pitch ±0.5°, roll ±1.5°, heave ±0.25 m): tags must not hop between places with her.
+  for (const [keys, most] of [[['forces', 'windTriangle', 'xray'], 6], [['forces', 'windTriangle', 'xray', 'labels'], 12]] as const) {
+    it(`keeps its tags in place while the boat rocks: at most ${most} changes of place in 12 s with ${keys.join(' + ')}`, () => {
+      const { sim } = sail(12, 60, { seconds: 20 });
+      const scene = new THREE.Scene();
+      const boat = new THREE.Group();
+      scene.add(boat);
+      const ov = new Overlays(scene, boat, tierSettings('low'));
+      ov.setViewport(1440, 900);
+      for (const k of keys) ov.set(k, true);
+      const entries = (ov as unknown as { labels: { entries: (TagBox & { visible: boolean })[] } }).labels.entries;
+      const last = new Map<TagBox, { ox: number; oy: number; shown: boolean }>();
+      let changes = 0;
+      const settle = 120, frames = settle + 30 * 60;
+      for (let i = 0; i < frames; i++) {
+        sim.step(); sim.step();
+        const s = sim.snapshot();
+        const t = i / 60;
+        boat.position.set(s.boat.pos.x, 0.25 * Math.sin((2 * Math.PI * t) / 3.1), -s.boat.pos.y);
+        const pitch = 0.5 * DEG * Math.sin((2 * Math.PI * t) / 3.1), roll = 1.5 * DEG * Math.sin((2 * Math.PI * t) / 4.3);
+        boat.rotation.set(pitch, -s.boat.heading, -s.boat.heel + roll, 'YXZ');
+        ov.update(1 / 60, s, chaseCamera(s.boat.heading, boat.position, 1440 / 900, 19.5));
+        if (i < settle) continue;
+        for (const e of entries) {
+          const p = last.get(e);
+          const ox = e.x - e.sx, oy = e.y - e.sy;
+          // A change of place: the box jumps more than 12 px relative to its anchor, or the tag blinks out or in.
+          if (p && ((p.shown && e.shown && Math.hypot(ox - p.ox, oy - p.oy) > 12) || (p.shown !== e.shown && e.visible))) changes++;
+          last.set(e, { ox, oy, shown: e.shown });
+        }
+      }
+      expect((changes * 12) / 30).toBeLessThanOrEqual(most);
+      ov.dispose();
+    });
+  }
+
+  it('glides a tag that changes place instead of jumping, and lands it exactly', () => {
+    const layer = new LabelLayer();
+    layer.setViewport(1440, 900);
+    layer.setSafeArea({ top: 0, right: 0, bottom: 0, left: 0 });
+    const cam = new THREE.OrthographicCamera(-720, 720, 450, -450, 0.1, 100);
+    cam.position.set(720, -450, 10);
+    cam.updateMatrixWorld();
+    // World x, −y = screen px.
+    const blocker = layer.create({ priority: 9, dx: 0, dy: 0 });
+    const t = layer.create({ priority: 1, dx: 0, dy: 0 });
+    const e = (t as unknown as { e: TagBox & { px: number; py: number } }).e;
+    t.text('Glide').at(new THREE.Vector3(700, -400, 0));
+    layer.frame(cam, 1 / 60);
+    const x0 = e.px, y0 = e.py;
+    // A tag of higher priority takes the place: the box sets off toward its new place and gets there.
+    blocker.text('Blocker, wide enough').at(new THREE.Vector3(700, -400, 0));
+    layer.frame(cam, 1 / 60);
+    const tx = e.x, ty = e.y;
+    expect(Math.hypot(tx - x0, ty - y0)).toBeGreaterThan(12);
+    const d1 = Math.hypot(e.px - tx, e.py - ty);
+    expect(d1).toBeGreaterThan(0);
+    expect(d1).toBeLessThan(Math.hypot(tx - x0, ty - y0));
+    for (let i = 0; i < 60; i++) layer.frame(cam, 1 / 60);
+    expect(e.px).toBe(e.x);
+    expect(e.py).toBe(e.y);
+    layer.dispose();
+  });
+
+  it('places fixed tags (the wheel\'s sector names) before movable ones, whatever their priority', () => {
+    const layer = new LabelLayer();
+    layer.setViewport(1440, 900);
+    layer.setSafeArea({ top: 0, right: 0, bottom: 0, left: 0 });
+    const cam = new THREE.OrthographicCamera(-720, 720, 450, -450, 0.1, 100);
+    cam.position.set(720, -450, 10);
+    cam.updateMatrixWorld();
+    const p = new THREE.Vector3(700, -400, 0);
+    const value = layer.create({ priority: 9, dx: 0, dy: 0 });
+    const sector = layer.create({ kind: 'sector', priority: 1, dx: 0, dy: 0 });
+    value.text('Heeling force', '1.20 kN').at(p);
+    sector.text('No-go').at(p);
+    for (let i = 0; i < 3; i++) layer.frame(cam, 1 / 60);
+    const placed = layer.placed();
+    expect(placed.map((t) => t.title).sort()).toEqual(['Heeling force', 'No-go']);
+    expect(rectsOverlap(placed[0]!, placed[1]!)).toBe(false);
+    layer.dispose();
+  });
 
   it('follows setSafeArea: tags move into the area given, and out of the rectangles to keep clear of', () => {
     const { sim } = sail(12, 60, { seconds: 20 });

@@ -1,5 +1,5 @@
 // End-to-end and unit checks for the overlay modules that do not need a GPU.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { DEG } from '../../../shared/math';
 import { OVERLAY_KEYS } from '../../../lessons/types';
@@ -11,6 +11,7 @@ import { laylineBearings } from '../laylines';
 import { DISPLAY_CAP, agxContrast, agxContrastInverse, agxForward, agxInverse, agxInverseLookup, agxInverseTable } from '../overlayMaterial';
 import { aeroSplit } from '../forces';
 import { SliceField } from '../flowField';
+import { FlowSlice } from '../flowSlice';
 import { COLORS, linearColor } from '../palette';
 import { SECTORS, pointOfSail } from '../wheel';
 import { bestMeanMs, sail } from './helpers';
@@ -189,6 +190,30 @@ describe('Overlays', () => {
     ov.dispose();
     expect(boat.children.length).toBe(0);
     expect(scene.children.length + boat.children.length).toBe(before);
+  });
+
+  it('does not retrace the flow slice\'s streamlines while the camera rests on the edge of a spacing step', () => {
+    const { sim } = sail(12, 60);
+    const scene = new THREE.Scene();
+    const boat = new THREE.Group();
+    const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 5000);
+    camera.position.set(10, 8, 20);
+    camera.lookAt(0, 4, 0);
+    const ov = new Overlays(scene, boat, tierSettings('high'));
+    ov.set('flowSlice', true);
+    const s = sim.snapshot();
+    for (let i = 0; i < 400; i++) ov.update(1 / 60, s, camera); // the field is built
+    const slice = (ov as unknown as { slice: FlowSlice }).slice;
+    const trace = vi.spyOn(slice as unknown as { startTrace(): void }, 'startTrace');
+    const toWorld = (x: number, y: number, z: number, out: THREE.Vector3) => out.set(y, -z, -x);
+    // A view scale wobbling round 1.5 (the edge between two steps: 3 × 1.5 = 4.5 quarters).
+    for (let i = 0; i < 120; i++) slice.update(1 / 60, 1 / 60, toWorld, 1.5 + 0.01 * Math.sin(i));
+    expect(trace.mock.calls.length).toBeLessThanOrEqual(1);
+    // A real change of distance still changes the spacing.
+    trace.mockClear();
+    slice.update(1 / 60, 1 / 60, toWorld, 2.5);
+    expect(trace).toHaveBeenCalledTimes(1);
+    ov.dispose();
   });
 
   // Timing: best-of-N already filters scheduler noise; the retry covers a machine that is busy for seconds.

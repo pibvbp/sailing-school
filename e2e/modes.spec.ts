@@ -73,6 +73,24 @@ test('a lesson gives back the overlays and the camera the learner had when it en
   await expect.poll(view).toEqual(before);
 });
 
+test('a lesson can bring the top camera closer: lesson 5 looks down from 38 m, and the view resets after it', async ({ page }) => {
+  await boot(page);
+  const height = () => page.evaluate(() => {
+    const app = window.__app!;
+    return { mode: app.cameraMode(), h: app.camera.position.y - app.boatRoot.position.y };
+  });
+  // The top view's own height in this window (it backs off on a small screen so the boat fits between the panels).
+  await page.evaluate(() => window.__app!.setCamera('top'));
+  await page.waitForTimeout(2500);
+  const own = (await height()).h;
+  expect(own).toBeGreaterThan(45);
+  await page.evaluate(() => window.__app!.startLesson('sail-is-a-wing'));
+  await expect.poll(async () => { const v = await height(); return v.mode === 'top' && Math.abs(v.h - 38) < 1; }, { timeout: 15_000 }).toBe(true);
+  await page.getByRole('radio', { name: 'Free sail' }).click();
+  await page.evaluate(() => window.__app!.setCamera('top'));
+  await expect.poll(async () => Math.abs((await height()).h - own) < 1, { timeout: 15_000 }).toBe(true);
+});
+
 /** Screen position (CSS px) of a point `h` metres above the waterline at the boat's centre. */
 async function boatPoint(page: Page, h: number): Promise<{ x: number; y: number }> {
   return page.evaluate((height) => {

@@ -17,6 +17,8 @@ export type { OceanBoat, OceanParams, OceanSampler, PuffPatch } from './types';
 
 /** Sampler queries within this distance of the boat are its own (hull, spray) and use the fine grid. */
 const BOAT_OWN_RADIUS = 4.5;
+/** Radius (m) of the deep-water backdrop under the x-ray window. */
+const XRAY_BACKDROP_R = 500;
 const _camPos = new THREE.Vector3();
 
 export class Ocean {
@@ -61,7 +63,9 @@ export class Ocean {
     this.probe = new OceanHeightSampler(renderer, this.surface.uniforms);
     this.sampler = this.probe;
     this.wake = new BoatWake(renderer, q);
-    this.backdrop = new THREE.Mesh(new THREE.CircleGeometry(60, 48).rotateX(-Math.PI / 2), this.surface.backdropMaterial);
+    // 7 m down and wide enough that a ray through the far side of the x-ray window (11 m from the boat) still meets it
+    // from a camera looking only 1° down: 11 + 7 / tan 1° ≈ 410 m.
+    this.backdrop = new THREE.Mesh(new THREE.CircleGeometry(XRAY_BACKDROP_R, 64).rotateX(-Math.PI / 2), this.surface.backdropMaterial);
     this.backdrop.name = 'OceanXrayBackdrop';
     this.backdrop.visible = false;
     this.backdrop.frustumCulled = false;

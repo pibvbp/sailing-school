@@ -43,7 +43,7 @@ First public release.
 - **Overlays:** the wind triangle, force vectors, the points-of-sail wheel, airflow particles, a live flow slice with a
   pressure map, angle-of-attack colouring on the sails, x-ray water with a leeway picture at the keel, part labels,
   laylines, the track, a telltale close-up and a polar chart. Tags are laid out so that they never overlap one another
-  or hide under a panel.
+  or hide under a panel, and they hold their place while the boat rocks.
 - **Instruments.** Boat speed, VMG, heading and course over ground, true and apparent wind, heel, leeway and rudder,
   and a round wind instrument.
 - **Five cameras:** chase, helm, top (wind at the top of the screen), sail view and free. They keep the boat in the

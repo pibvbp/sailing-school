@@ -30,6 +30,8 @@ const AOA_OK = new THREE.Color(COLORS.groove);
 const AOA_STALL = new THREE.Color(COLORS.stalled);
 /** How far (px) the Suction / Pressure tags stand off their peaks. */
 const CALLOUT_PX = 40;
+/** How far (in quarter steps) the view scale must pass a step's edge before the spacing changes. */
+const SPACING_HYSTERESIS = 0.15;
 /** RK2 step (m) — a little under half the grid spacing — and the longest streamline in steps. */
 const STEP = 0.15;
 const MAX_STEPS = 150;
@@ -135,6 +137,8 @@ export class FlowSlice {
   private readonly clothColor = new THREE.Color('#ffffff');
   private readonly casingColor = new THREE.Color('#04101f');
   private spacing = LINE_SPACING;
+  /** Spacing step (quarters of LINE_SPACING, from the view scale); −1 until the first update. */
+  private spacingStep = -1;
   private aoa = false;
   private quiet = false;
   private readonly tagLabel: Label;
@@ -239,7 +243,10 @@ export class FlowSlice {
   update(dt: number, flowDt: number, toWorld: (x: number, y: number, z: number, out: THREE.Vector3) => THREE.Vector3, viewScale = 1): void {
     this.time += flowDt;
     // Lines 0.5 m apart are 10 px apart from 70 m up — hatching that hides the boat. Trace them further apart there.
-    const spacing = LINE_SPACING * Math.min(2.5, Math.max(1, Math.round(viewScale * 3) / 4));
+    // In steps of a quarter, with hysteresis: a camera resting on a step's edge must not retrace every frame.
+    const x = viewScale * 3;
+    if (this.spacingStep < 0 || Math.abs(x - this.spacingStep) > 0.5 + SPACING_HYSTERESIS) this.spacingStep = Math.round(x);
+    const spacing = LINE_SPACING * Math.min(2.5, Math.max(1, this.spacingStep / 4));
     if (spacing !== this.spacing) {
       this.spacing = spacing;
       if (this.seenVersion > 0) this.startTrace();

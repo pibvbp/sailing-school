@@ -6,8 +6,9 @@
 // and fanned around it, or its fixed offset and the mirrored ones), then is pushed away from the layout's focus (the
 // boat on screen) ring by ring until it is free — so a crowd of tags fans out round the boat in the order of their
 // anchors instead of piling up on it. Every candidate is clamped into the safe area before it is tested; a tag that
-// still finds no room is hidden, never stacked. A tag stays where it was put while that place is free, and moves back
-// to a better place only once that has been free for a moment, so tags do not flicker between two places.
+// still finds no room is hidden, never stacked. A tag stays where it was put — at the same offset from its anchor, so it
+// rides with the thing it names — while that place is free, and moves back to a better place only once that has been
+// free for longer than a wave period, so tags do not hop between two places while the boat rocks.
 // Tags also keep off the arrows on screen (a tag lying across an arrow hides the very thing it names) and out of a
 // small disc round the boat.
 //
@@ -48,6 +49,13 @@ export interface TagBox {
   slot: number;
   /** Seconds a better candidate has been free while the tag stayed where it was. */
   wait: number;
+  /** Where the tag stood last frame: its box's top-left corner relative to the anchor. */
+  kx: number;
+  ky: number;
+  /** Seconds before a tag that found no room looks for one again. */
+  retry: number;
+  /** Seconds a place must still stay free before a tag that lost its place shows again. */
+  lost: number;
   /** Top-left corner of the tag box. */
   x: number;
   y: number;
@@ -55,7 +63,7 @@ export interface TagBox {
 }
 
 export function newTagBox(): TagBox {
-  return { sx: 0, sy: 0, w: 0, h: 0, mode: TAG_OFFSET, dx: 0, dy: -18, tdx: 0, tdy: -1, gap: 10, radial: 0, slot: -1, wait: 0, x: 0, y: 0, shown: false };
+  return { sx: 0, sy: 0, w: 0, h: 0, mode: TAG_OFFSET, dx: 0, dy: -18, tdx: 0, tdy: -1, gap: 10, radial: 0, slot: -1, wait: 0, kx: 0, ky: 0, retry: 0, lost: 0, x: 0, y: 0, shown: false };
 }
 
 // Candidate tables (flat, so reading them never allocates).
@@ -80,8 +88,22 @@ const FAN_LEAN = 36;
 export const TAG_GAP_X = 4;
 export const TAG_GAP_Y = 3;
 const TAG_GAP_MIN = 1.5;
-/** Seconds a better place must stay free before a tag moves back to it. */
-const HOLD_S = 1.2;
+/** Seconds a better place must stay free before a tag moves back to it: longer than a wave period. */
+const HOLD_S = 4.5;
+/**
+ * A tag in place follows its candidate's own geometry while that moves less than this per frame (px); a bigger jump
+ * (the fan direction swinging round near the focus) leaves the tag where it was relative to its anchor.
+ */
+const FOLLOW_PX = 6;
+/**
+ * A tag in place that another tag or a HUD rectangle now touches first edges aside, up to this far (px) in a frame,
+ * before it gives up its place: anchors on different parts of the boat sway against each other as she rocks.
+ */
+const NUDGE_PX = 8;
+/** Seconds a tag that found no room waits before searching all its candidates again. */
+const RETRY_S = 0.25;
+/** Seconds a new place must stay free before a tag that lost its place shows again: longer than the boat's rocking. */
+const SHOW_S = 2.5;
 /** Most rectangles the tags must keep clear of (HUD parts inside the safe area). */
 export const MAX_KEEP_OUT = 8;
 /** Most arrows the tags keep off, and the clearance (px) a tag keeps from an arrow's centre line. */
@@ -121,6 +143,8 @@ export class TagLayout {
   private count = 0;
   private readonly keepOut: ScreenRect[] = [];
   private keepOutCount = 0;
+  /** The rectangle (a placed tag or a keep-out) that made the last `free` fail; null when something else did. */
+  private hit: ScreenRect | null = null;
 
   constructor() {
     for (let i = 0; i < MAX_KEEP_OUT; i++) this.keepOut.push({ x: 0, y: 0, w: 0, h: 0 });
@@ -157,30 +181,95 @@ export class TagLayout {
     this.count = 0;
     for (let q = 0; q < n; q++) {
       const e = list[q]!;
+      // Wider or taller than the safe area itself: there is no place where it lies inside, so it is not shown.
+      if (e.w > this.x1 - this.x0 || e.h > this.y1 - this.y0) { e.slot = -1; e.shown = false; continue; }
       const total = PRIMARY[e.mode]! + (e.mode === TAG_FIXED ? 0 : FAN.length * FAN_RINGS);
       // Where it was, if that place is still free — judged without the comfort margins, so a tag does not shuffle
       // because an arrow swayed a pixel nearer.
-      let stay = false, sx = 0, sy = 0;
-      if (e.slot >= 0 && e.slot < total && this.candidate(e, e.slot) && this.free(e, 0)) { stay = true; sx = e.x; sy = e.y; }
-      // The best place that is free now (while it can stay, only a better one matters).
+      const stay = e.slot >= 0 && e.slot < total && this.kept(e);
+      const sx = e.x, sy = e.y;
+      /** The tag stands on its own candidate (not left behind by a jump of it). */
+      const onSlot = stay && this.candidate(e, e.slot) && Math.abs(e.x - sx) + Math.abs(e.y - sy) < 0.5;
+      // The best place that is free now. While it can stay, only a better one matters, and only one of its preferred
+      // places, not a nearer ring of the fan — or its own candidate, once a jump of that has left the tag behind.
       let ideal = -1;
-      const limit = stay ? e.slot : total;
-      for (let i = 0; i < limit; i++) {
-        if (this.candidate(e, i) && this.free(e, 1)) { ideal = i; break; }
+      if (stay || e.retry <= 0) {
+        const limit = stay ? (onSlot ? Math.min(e.slot, PRIMARY[e.mode]!) : e.slot + 1) : total;
+        for (let i = 0; i < limit; i++) {
+          if (this.candidate(e, i) && this.free(e, 1)) { ideal = i; break; }
+        }
       }
       let use = ideal;
       if (stay) {
-        // It moves back to a better place only once that has been free for a moment.
+        // It moves to a better place only once that has been free for a while.
         if (ideal >= 0) e.wait += dt; else e.wait = 0;
         if (ideal < 0 || e.wait < HOLD_S) { use = e.slot; e.x = sx; e.y = sy; } else e.wait = 0;
+        e.retry = 0;
       } else {
         e.wait = 0;
+        // No room anywhere: look again in a moment rather than every frame.
+        e.retry = ideal >= 0 ? 0 : e.retry > 0 ? e.retry - dt : RETRY_S;
+        if (ideal < 0 && e.slot >= 0) e.lost = SHOW_S; // it had a place and lost it
+        else if (ideal >= 0 && e.lost > 0) {
+          // Back only once the new place has stayed free a while; checked every frame meanwhile.
+          e.lost -= dt;
+          if (e.lost > 0) use = -1;
+        } else if (ideal < 0 && e.lost > 0) e.lost = SHOW_S;
       }
       e.slot = use;
       e.shown = use >= 0;
-      if (e.shown) this.placed[this.count++] = e;
+      if (e.shown) {
+        e.kx = e.x - e.sx;
+        e.ky = e.y - e.sy;
+        this.placed[this.count++] = e;
+      }
     }
   }
+
+  /**
+   * Can the tag stay where it stood? Sets its box to that place: its own candidate when that has moved only a little
+   * since the last frame (so it follows its arrow's head smoothly), else the same offset from the anchor as before.
+   */
+  private kept(e: TagBox): boolean {
+    if (e.mode === TAG_FIXED) return this.candidate(e, e.slot) && this.free(e, 0);
+    const kx = this.clampX(e, e.sx + e.kx), ky = this.clampY(e, e.sy + e.ky);
+    if (this.candidate(e, e.slot) && Math.abs(e.x - kx) + Math.abs(e.y - ky) <= FOLLOW_PX && this.free(e, 0)) return true;
+    e.x = kx;
+    e.y = ky;
+    return this.free(e, 0) || this.nudge(e);
+  }
+
+  /**
+   * Edge the tag just clear of the rectangle it touches, the shortest way first, by at most NUDGE_PX; true when one
+   * of the four ways leaves it free (the box is then there), else the box is put back.
+   */
+  private nudge(e: TagBox): boolean {
+    const o = this.hit;
+    if (!o) return false;
+    const x = e.x, y = e.y;
+    // Shifts that put the box just clear of `o` to its left, right, top and bottom.
+    const d0 = o.x - TAG_GAP_X - (x + e.w), d1 = o.x + o.w + TAG_GAP_X - x;
+    const d2 = o.y - TAG_GAP_Y - (y + e.h), d3 = o.y + o.h + TAG_GAP_Y - y;
+    let tried = 0;
+    for (;;) {
+      let best = NUDGE_PX, way = -1;
+      if (!(tried & 1) && -d0 <= best) { best = -d0; way = 0; }
+      if (!(tried & 2) && d1 <= best) { best = d1; way = 1; }
+      if (!(tried & 4) && -d2 <= best) { best = -d2; way = 2; }
+      if (!(tried & 8) && d3 <= best) { best = d3; way = 3; }
+      if (way < 0) break;
+      tried |= 1 << way;
+      e.x = way === 0 ? this.clampX(e, x + d0) : way === 1 ? this.clampX(e, x + d1) : x;
+      e.y = way === 2 ? this.clampY(e, y + d2) : way === 3 ? this.clampY(e, y + d3) : y;
+      if (this.free(e, 0)) return true;
+    }
+    e.x = x;
+    e.y = y;
+    return false;
+  }
+
+  private clampX(e: TagBox, x: number): number { return Math.max(this.x0, Math.min(x, this.x1 - e.w)); }
+  private clampY(e: TagBox, y: number): number { return Math.max(this.y0, Math.min(y, this.y1 - e.h)); }
 
   /** Candidate `i` of a tag: writes its box position; false when this tag has no such candidate. */
   private candidate(e: TagBox, i: number): boolean {
@@ -227,8 +316,8 @@ export class TagLayout {
       cy = e.sy + (i === 0 ? e.dy : OFFSET_Y[i]! * Math.max(Math.abs(e.dy), e.h * 0.5 + 6));
     }
     // Inside the safe area, wherever the anchor is.
-    e.x = Math.max(this.x0, Math.min(cx - e.w * 0.5, this.x1 - e.w));
-    e.y = Math.max(this.y0, Math.min(cy - e.h * 0.5, this.y1 - e.h));
+    e.x = this.clampX(e, cx - e.w * 0.5);
+    e.y = this.clampY(e, cy - e.h * 0.5);
     return true;
   }
 
@@ -237,6 +326,7 @@ export class TagLayout {
    * touches nothing (the place it already has).
    */
   private free(e: TagBox, margin: number): boolean {
+    this.hit = null;
     if (this.clearR > 0 && this.hasFocus && e.mode !== TAG_FIXED) {
       // Nearest point of the box to the focus inside the disc: the tag would sit on the boat.
       const nx = Math.max(e.x, Math.min(this.fx, e.x + e.w)) - this.fx;
@@ -247,11 +337,17 @@ export class TagLayout {
     const gx = TAG_GAP_MIN + margin * (TAG_GAP_X - TAG_GAP_MIN), gy = TAG_GAP_MIN + margin * (TAG_GAP_Y - TAG_GAP_MIN);
     for (let i = 0; i < this.count; i++) {
       const o = this.placed[i]!;
-      if (e.x < o.x + o.w + gx && e.x + e.w + gx > o.x && e.y < o.y + o.h + gy && e.y + e.h + gy > o.y) return false;
+      if (e.x < o.x + o.w + gx && e.x + e.w + gx > o.x && e.y < o.y + o.h + gy && e.y + e.h + gy > o.y) {
+        this.hit = o;
+        return false;
+      }
     }
     for (let i = 0; i < this.keepOutCount; i++) {
       const o = this.keepOut[i]!;
-      if (e.x < o.x + o.w && e.x + e.w > o.x && e.y < o.y + o.h && e.y + e.h > o.y) return false;
+      if (e.x < o.x + o.w && e.x + e.w > o.x && e.y < o.y + o.h && e.y + e.h > o.y) {
+        this.hit = o;
+        return false;
+      }
     }
     // A new place keeps clear of the arrows; a tag in place moves once an arrow's centre line reaches its box.
     const sg = this.segs;

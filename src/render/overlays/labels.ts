@@ -94,6 +94,8 @@ interface Entry extends TagBox {
   tail: THREE.Vector3;
   hasTail: boolean;
   // What is on screen: the box glides from where it was to where the layout put it.
+  /** Shown last frame (the glide starts from there; `lastShown` is what the DOM was last told). */
+  wasShown: boolean;
   ox: number;
   oy: number;
   px: number;
@@ -213,6 +215,9 @@ export function defaultSafeInsets(width: number, out: SafeInsets): SafeInsets {
   return out;
 }
 
+/** Placing order: fixed tags first, then by priority. */
+const rankOf = (e: Entry): number => (e.mode === TAG_FIXED ? 1e6 : 0) + e.opts.priority;
+
 const tmp = new THREE.Vector3();
 const tmp2 = new THREE.Vector3();
 
@@ -291,7 +296,7 @@ export class LabelLayer {
       ...newTagBox(),
       el, title, value, opts: full, anchor: new THREE.Vector3(), visible: false, titleText: '', valueText: '', valueShape: 0, sizeDirty: true,
       color: full.color, cls: '', tail: new THREE.Vector3(), hasTail: false,
-      ox: 0, oy: 0, px: 0, py: 0, lead: false, lastX: NaN, lastY: NaN, lastShown: false, lastLead: false,
+      wasShown: false, ox: 0, oy: 0, px: 0, py: 0, lead: false, lastX: NaN, lastY: NaN, lastShown: false, lastLead: false,
       line, casing, dot, len, ex: 0, ey: 0, lx1: NaN, ly1: NaN, lx2: NaN, ly2: NaN, dotX: NaN, dotY: NaN,
     };
     this.entries.push(e);
@@ -411,10 +416,12 @@ export class LabelLayer {
         e.radial = o.radial;
       }
       if (e.sizeDirty) this.measure(e);
-      // Insert by priority (stable; the list is rebuilt in creation order, so this is a short insertion sort).
+      // Insert by priority (stable; the list is rebuilt in creation order, so this is a short insertion sort). Fixed
+      // tags (the wheel's sector names) go first: they cannot move out of the way, the others can.
       let i = n++;
       const order = this.order;
-      while (i > 0 && order[i - 1]!.opts.priority < o.priority) { order[i] = order[i - 1]!; i--; }
+      const rank = rankOf(e);
+      while (i > 0 && rankOf(order[i - 1]!) < rank) { order[i] = order[i - 1]!; i--; }
       order[i] = e;
     }
     L.place(this.order, n, dt);
@@ -448,7 +455,7 @@ export class LabelLayer {
     if (e.shown) {
       // Glide: the box keeps its place relative to the anchor and eases to the new one when the layout moves it.
       const tx = e.x - e.sx, ty = e.y - e.sy;
-      if (!e.lastShown) { e.ox = tx; e.oy = ty; }
+      if (!e.wasShown) { e.ox = tx; e.oy = ty; }
       else {
         const k = 1 - Math.exp(-dt / GLIDE_S);
         e.ox += (tx - e.ox) * k;
@@ -472,6 +479,7 @@ export class LabelLayer {
     } else {
       e.lead = false;
     }
+    e.wasShown = e.shown;
     if (!this.root) return;
     if (e.shown !== e.lastShown) {
       e.el.style.opacity = e.shown ? '1' : '0';
