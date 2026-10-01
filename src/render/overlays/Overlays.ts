@@ -46,7 +46,7 @@ const FIELD_BUDGET_MS = 0.3;
 /** Slices checked or started per frame at most (a check that finds nothing changed costs a few µs). */
 const MAX_STARTS = 3;
 /** Air-flow seconds shown when flow is switched on while the simulation is paused (then the picture freezes). */
-const DEVELOP_S = 0.8;
+const DEVELOP_S = 2.5;
 /**
  * Metres per CSS px at the boat from the chase camera (17 m away, 50° lens, a 900 px window): the view the arrow
  * lengths were designed for. Further away the arrows are stretched by up to this factor, so they stay readable.

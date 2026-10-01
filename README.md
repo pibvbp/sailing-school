@@ -107,7 +107,9 @@ decides which controls are live. The app then checks what you do in the live sim
 |---|---|
 | ![Force arrows on the sails and keel, with the true, boat and apparent wind arrows](docs/images/forces.jpg) | ![Streamlines bending around the sails, and a horizontal slice through the rig with a pressure map](docs/images/flow.jpg) |
 | **The helm view with the telltale cam** | **The top view with laylines to a mark** |
-| ![Looking forward from the helm, with a picture-in-picture view of the jib's telltales](docs/images/helm.jpg) | ![The boat from above, the wind at the top of the screen, and laylines running down from the windward mark](docs/images/top.jpg) |
+| ![Looking forward from the helm, with a picture-in-picture close-up of the jib's telltales](docs/images/helm.jpg) | ![The boat from above, the wind at the top of the screen, and laylines running down from the windward mark](docs/images/top.jpg) |
+| **X-ray: the keel at work, and leeway** | **The sail view** |
+| ![See-through water round the boat: the keel's lift against the sails' heeling force, and the heading and track arrows with the leeway angle between them](docs/images/xray.jpg) | ![Looking up the mainsail from beside the boom: draft stripes, the sail number showing through, and telltales streaming from the leech](docs/images/sail.jpg) |
 
 The overlays are in the **View** panel, three of them also on keys:
 
@@ -255,7 +257,7 @@ pnpm dev          # Vite prints the URL: http://localhost:5180 by default; modul
 | `pnpm test:audio` | The soundscape rendered in headless Chromium |
 | `pnpm test:perf` | The strict performance budgets |
 | `pnpm polars` | Regenerates `src/sim/data/polars.json` from the simulation |
-| `pnpm snap` | Headless screenshots (`scripts/snap.mjs`) |
+| `pnpm snap` | One headless screenshot (`scripts/snap.mjs`); `node scripts/shots.mjs scripts/readme-shots.json snaps/readme` retakes the README pictures |
 
 Before running `pnpm e2e`, `pnpm test:audio` or `pnpm snap`, install Playwright's Chromium once with
 `pnpm exec playwright install chromium`. [CONTRIBUTING.md](CONTRIBUTING.md) has the details.
@@ -275,7 +277,7 @@ src/
   lessons/        the lesson engine, the glossary and the 18 lessons
   audio/          the procedural soundscape
 demos/            a page per module (dev server only)
-scripts/          polars.ts (regenerate the polars), snap.mjs (headless screenshots)
+scripts/          polars.ts (regenerate the polars), snap.mjs and shots.mjs (headless screenshots)
 e2e/              Playwright smoke tests
 docs/             physics, architecture, rendering, writing lessons
 ```

@@ -68,8 +68,8 @@ describe('flow-slice scheduler', () => {
     after.forEach((v, i) => expect(v).toBeGreaterThan(before[i]! + 1));
   });
 
-  // Timing part: best of 8 fresh overlays plus a retry for a machine that is busy for seconds; the deterministic
-  // "at most two slices per frame" check below is the real regression guard.
+  // Timing part: best of 8 fresh overlays plus a retry for a machine that is busy for seconds; the "never more
+  // slices in a frame than the scheduler may start" check below is the real regression guard.
   it('switching flow on spreads the slice rebuilds over frames, and re-applying it costs nothing', { retry: 2 }, () => {
     // Warm the JIT on a throwaway instance so the first measured frame is not compilation.
     const warm = rig();
@@ -90,7 +90,8 @@ describe('flow-slice scheduler', () => {
     }
     expect(Math.min(...firstFrame)).toBeLessThan(perfBudget(1.5)); // includes two sim steps and a snapshot
 
-    // Deterministic: at most two slices are published in any frame (it was all six at once), all within 40 frames.
+    // No frame publishes more slices than the scheduler may start in one (three, and only while they fit its time
+    // budget: a fast machine fits three, a busy one fewer). It was all six at once. All are there within 40 frames.
     const { ov, frame, fields } = rig();
     ov.set('flow', true);
     ov.set('flowSlice', true);
@@ -101,7 +102,7 @@ describe('flow-slice scheduler', () => {
       maxPublished = Math.max(maxPublished, fields().filter((f, k) => f.version !== v0[k]).length);
     }
     expect(fields().every((f) => f.version > 0)).toBe(true);
-    expect(maxPublished).toBeLessThanOrEqual(2);
+    expect(maxPublished).toBeLessThanOrEqual(3);
 
     // A lesson step re-applies the same overlay state: no forced rebuilds follow.
     const priv = ov as unknown as { forced: Set<SliceField> };

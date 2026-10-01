@@ -1,0 +1,59 @@
+[
+ {
+  "name": "hero",
+  "size": "1600x900",
+  "fresh": true,
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); a.setTimeOfDay(17.6); a.scenario({ wind: { tws: 13*KN, twd: 200*D, gustiness: 0.3, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 }, boat: { psi: 250*D, u: 3 }, controls: { helmMode: 'twa', helmTarget: -50*D } }); a.setCamera('chase'); document.getElementById('ui').style.display='none'; window.dispatchEvent(new Event('resize')); await w(9000);"
+ },
+ {
+  "name": "forces",
+  "size": "1600x900",
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); for (const k of Object.keys(a.overlays())) a.setOverlay(k, false); a.setForceParts(null); a.setTimeOfDay(15); a.scenario({ wind: { tws: 12*KN, twd: 225*D, gustiness: 0.2, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 }, boat: { psi: 180*D, u: 3 }, controls: { helmMode: 'twa', helmTarget: 45*D } }); a.setCamera('chase'); a.setOverlay('forces', true); a.setOverlay('windTriangle', true); document.getElementById('ui').style.display='none'; window.dispatchEvent(new Event('resize')); await w(8000);"
+ },
+ {
+  "name": "xray",
+  "size": "1600x900",
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); for (const k of Object.keys(a.overlays())) a.setOverlay(k, false); a.setForceParts(null); a.setTimeOfDay(15); a.scenario({ wind: { tws: 15*KN, twd: 225*D, gustiness: 0.1, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 }, boat: { psi: 182*D, u: 3 }, controls: { helmMode: 'twa', helmTarget: 43*D } }); a.setCamera('chase'); a.setOverlay('xray', true); a.setOverlay('forces', true); a.setForceParts(['heel','keel']); document.getElementById('scene').dispatchEvent(new WheelEvent('wheel',{deltaY:-260,bubbles:true,cancelable:true})); await w(9000);"
+ },
+ {
+  "name": "flow",
+  "size": "1600x900",
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); for (const k of Object.keys(a.overlays())) a.setOverlay(k, false); a.setForceParts(null); a.setTimeOfDay(16); a.scenario({ wind: { tws: 12*KN, twd: 225*D, gustiness: 0.2, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 }, boat: { psi: 180*D, u: 3 }, controls: { helmMode: 'twa', helmTarget: 45*D } }); a.setCamera('top'); a.setOverlay('flow', true); a.setOverlay('flowSlice', true); document.getElementById('scene').dispatchEvent(new WheelEvent('wheel',{deltaY:-800,bubbles:true,cancelable:true})); await w(9000);"
+ },
+ {
+  "name": "top",
+  "size": "1600x900",
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); for (const k of Object.keys(a.overlays())) a.setOverlay(k, false); a.setForceParts(null); a.setTimeOfDay(13); a.scenario({ wind: { tws: 12*KN, twd: 225*D, gustiness: 0.2, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 }, boat: { psi: 180*D, u: 3 }, controls: { helmMode: 'twa', helmTarget: 45*D } }); const b=a.sim.boat; const up={ e: Math.sin(225*D), n: Math.cos(225*D) }; a.setMarks([{ id: 'w', e: b.e + up.e*160 + 20, n: b.n + up.n*160, kind: 'windward' }]); a.setOverlay('laylines', true); a.setOverlay('track', true); a.setCamera('top'); document.getElementById('scene').dispatchEvent(new WheelEvent('wheel',{deltaY:1100,bubbles:true,cancelable:true})); await w(12000);"
+ },
+ {
+  "name": "sail",
+  "size": "1600x900",
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); for (const k of Object.keys(a.overlays())) a.setOverlay(k, false); a.setForceParts(null); a.setMarks([]); a.setTimeOfDay(16.5); a.scenario({ wind: { tws: 12*KN, twd: 225*D, gustiness: 0.2, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 }, boat: { psi: 180*D, u: 3 }, controls: { helmMode: 'twa', helmTarget: 45*D } }); a.setCamera('sail'); await w(7000);"
+ },
+ {
+  "name": "helm",
+  "size": "1600x900",
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); for (const k of Object.keys(a.overlays())) a.setOverlay(k, false); a.setForceParts(null); document.getElementById('ui').style.display=''; window.dispatchEvent(new Event('resize')); a.setMode('free'); a.setTimeOfDay(17); a.scenario({ wind: { tws: 12*KN, twd: 225*D, gustiness: 0.2, shiftAmplitude: 0, shiftPeriod: 120, seed: 7 }, boat: { psi: 180*D, u: 3 }, controls: { helmMode: 'twa', helmTarget: 45*D } }); a.setCamera('helm'); a.setOverlay('telltaleCam', true); await w(7000);"
+ },
+ {
+  "name": "lesson",
+  "size": "1600x900",
+  "fresh": true,
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); a.startLesson('jib-telltales'); await w(8000);"
+ },
+ {
+  "name": "lab",
+  "size": "1600x900",
+  "fresh": true,
+  "wait": 1500,
+  "eval": "const w=(ms)=>new Promise(r=>setTimeout(r,ms)); const a=window.__app, KN=0.514444, D=Math.PI/180; a.setQuality('high'); a.setTimeOfDay(15); a.setMode('lab'); a.setOverlay('flow', true); a.setOverlay('forces', true); await w(8000);"
+ }
+]
