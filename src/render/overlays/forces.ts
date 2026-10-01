@@ -201,6 +201,8 @@ export class ForceOverlay {
   private readonly luff = new THREE.Vector3();
   private readonly up = new THREE.Vector3();
   private readonly fwd = new THREE.Vector3();
+  /** Axis the angle-of-attack arc turns about: from the chord toward the wind. */
+  private readonly axis = new THREE.Vector3();
   private readonly sectionColor = new THREE.Color();
   /** Construction lines (parallelograms; the chord and wind lines of the angle of attack): the dash period follows the view scale. */
   private readonly dash = { width: 1.6, alpha: 0.55, dash: DASH_M, duty: 0.55 };
@@ -497,11 +499,14 @@ export class ForceOverlay {
     this.g.copy(this.luff).addScaledVector(this.fwd, R);
     this.buf[3] = this.g.x; this.buf[4] = this.g.y; this.buf[5] = this.g.z;
     this.lines.add(this.buf, 2, C.white, this.ray);
-    // The angle of attack: the arc between the wind's line and the chord line.
+    // The angle of attack: an arc from the chord line, turning toward the wind by the angle in the tag. That is the
+    // effective angle the sail works at (the trim panel's number), a few degrees less than the angle to the drawn
+    // apparent wind: the sail bends the air ahead of it (downwash), so the arc stops just short of the wind's line.
     const r = 0.74 * R;
+    this.axis.crossVectors(this.fwd, this.up);
+    if (this.axis.lengthSq() < 1e-6) this.axis.set(0, 1, 0); else this.axis.normalize();
     for (let q = 0; q < ARC_PTS; q++) {
-      const t = q / (ARC_PTS - 1);
-      this.g.copy(this.up).lerp(this.fwd, t).normalize();
+      this.g.copy(this.fwd).applyAxisAngle(this.axis, (aoa * q) / (ARC_PTS - 1));
       this.arc[3 * q] = this.luff.x + this.g.x * r; this.arc[3 * q + 1] = this.luff.y + this.g.y * r; this.arc[3 * q + 2] = this.luff.z + this.g.z * r;
     }
     this.lines.add(this.arc, ARC_PTS, stateColor, ARC);

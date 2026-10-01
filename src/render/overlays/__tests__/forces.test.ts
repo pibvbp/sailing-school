@@ -12,6 +12,7 @@ import { ForceOverlay } from '../forces';
 import { BoatFrame } from '../frames';
 import type { LabelLayer } from '../labels';
 import type { LineBatch } from '../lines';
+import { DEG } from '../../../shared/math';
 import { COLORS, linearColor } from '../palette';
 import { sail } from './helpers';
 
@@ -92,7 +93,7 @@ describe('force scale of a reduced set', () => {
 });
 
 /** Run the real overlays on a sailing boat and record every arrow drawn in the last frame, with its colour. */
-function drawnArrows(twa: number, keys: readonly ('forces' | 'xray')[], parts: Parameters<Overlays['setForceParts']>[0] = null) {
+function drawnArrows(twa: number, keys: readonly ('forces' | 'xray' | 'aoa')[], parts: Parameters<Overlays['setForceParts']>[0] = null) {
   const { sim } = sail(12, twa, { seconds: 20 });
   const scene = new THREE.Scene();
   const boat = new THREE.Group();
@@ -103,6 +104,10 @@ function drawnArrows(twa: number, keys: readonly ('forces' | 'xray')[], parts: P
   for (const k of keys) ov.set(k, true);
   const batch = (ov as unknown as { arrows: ArrowBatch }).arrows;
   const drawn: { a: THREE.Vector3; b: THREE.Vector3; color: THREE.Color }[] = [];
+  const lines: Float32Array[] = [];
+  const lineBatch = (ov as unknown as { forceLines: LineBatch }).forceLines;
+  const addLine = lineBatch.add.bind(lineBatch);
+  vi.spyOn(lineBatch, 'add').mockImplementation((xyz, count, ...rest) => { lines.push(Float32Array.from(Array.from(xyz).slice(0, 3 * count))); addLine(xyz, count, ...rest); });
   const add = batch.add.bind(batch);
   vi.spyOn(batch, 'add').mockImplementation((a, b, color, style, alpha) => { drawn.push({ a: a.clone(), b: b.clone(), color: color.clone() }); add(a, b, color, style, alpha); });
   let s = sim.snapshot();
@@ -114,10 +119,11 @@ function drawnArrows(twa: number, keys: readonly ('forces' | 'xray')[], parts: P
     camera.position.set(boat.position.x + 12, 8, boat.position.z + 15);
     camera.lookAt(boat.position);
     drawn.length = 0;
+    lines.length = 0;
     ov.update(1 / 60, s, camera);
   }
   ov.dispose();
-  return { s, drawn };
+  return { s, drawn, lines };
 }
 
 /** Unit vector to starboard (level, world) for a heading. */
@@ -157,6 +163,32 @@ describe('force geometry', () => {
       expect(side).toBe(-Math.sign(s.wind.twa));
       expect(side).toBe(Math.sign(s.boat.v));
       expect(Math.acos(Math.min(1, h.dot(t)))).toBeCloseTo(Math.abs(s.boat.leeway), 2);
+    });
+  }
+});
+
+describe('angle-of-attack arc', () => {
+  for (const twa of [50, 90]) {
+    it(`spans the angle in its tag, from the chord line (${twa}° to the wind)`, () => {
+      const { s, lines } = drawnArrows(twa, ['forces', 'aoa'], ['liftDrag']);
+      const secs = s.sails.main.sections;
+      const aoa = secs.reduce((sum, sec) => sum + sec.aoa, 0) / secs.length;
+      // The arc is the 9-point line; the chord is a 2-point line ending ahead of the luff.
+      const arc = lines.find((l) => l.length === 3 * 9)!;
+      expect(arc).toBeTruthy();
+      const p = (i: number) => new THREE.Vector3(arc[3 * i]!, arc[3 * i + 1]!, arc[3 * i + 2]!);
+      // Centre: the arc is a circle round the luff; take it from three of its points.
+      const a = p(0), b = p(4), c = p(8);
+      const ab = b.clone().sub(a), ac = c.clone().sub(a), n = ab.clone().cross(ac);
+      const centre = a.clone().add(
+        n.clone().cross(ab).multiplyScalar(ac.lengthSq()).add(ac.clone().cross(n).multiplyScalar(ab.lengthSq())).divideScalar(2 * n.lengthSq()),
+      );
+      const angle = a.clone().sub(centre).angleTo(c.clone().sub(centre));
+      expect(angle / DEG).toBeCloseTo(Math.abs(aoa) / DEG, 1);
+      // It starts on the chord: the chord line passes through the arc's first point's direction from the luff.
+      const chord = lines.filter((l) => l.length === 6).map((l) => new THREE.Vector3(l[3]!, l[4]!, l[5]!).sub(centre).normalize());
+      const start = a.clone().sub(centre).normalize();
+      expect(Math.max(...chord.map((d) => d.dot(start)))).toBeGreaterThan(0.9999);
     });
   }
 });

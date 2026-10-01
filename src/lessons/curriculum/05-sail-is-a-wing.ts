@@ -58,7 +58,7 @@ export const sailIsAWing: Lesson = {
     step({
       title: 'Lift and drag',
       body: `<p>Split the sail's force in two. [[lift|Lift]] — the pink arrow — acts at right angles to the apparent wind, the amber arrow. [[drag|Drag]] — the short lilac arrow — acts along it. A good sail makes a lot of lift for little drag, like an aircraft wing standing on end. (The arrows are the forces overlay, <kbd>V</kbd>.)</p>
-<p>How much lift depends on the [[angle-of-attack|angle of attack]]: the angle between the sail's chord (the straight line from [[luff]] to [[leech]], dashed) and the apparent wind. It is the small arc ahead of the mast, where the two lines meet, and the trim panel shows it as <strong>AoA</strong>. The arc and the sail are blue when the sail luffs, green in the [[groove]] and red when it stalls — like the groove meter in the trim panel.</p>`,
+<p>How much lift depends on the [[angle-of-attack|angle of attack]]: the angle between the sail's chord (the straight line from [[luff]] to [[leech]], dashed) and the apparent wind. It is the small arc ahead of the mast, drawn from the chord toward the wind, and the trim panel shows it as <strong>AoA</strong>. The arc stops a little short of the wind's line: the sail bends the air ahead of it, so it meets the wind at a slightly smaller angle than the one drawn. The arc and the sail are blue when the sail luffs, green in the [[groove]] and red when it stalls — like the groove meter in the trim panel.</p>`,
       camera: 'top',
       overlays: view('forces', 'aoa'),
       ...figure('liftDrag'),
