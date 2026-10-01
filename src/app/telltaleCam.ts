@@ -1,15 +1,21 @@
-// Telltale cam (plan Task 16): a picture-in-picture view from the helm, framed on the jib's luff
-// telltales. The scene is re-rendered at 20 Hz into a small multisampled HDR target, which is drawn into
+// Telltale cam (plan Task 16): a picture-in-picture close-up of one pair of the jib's luff telltales, seen
+// from just behind and to windward of the luff. The scene is re-rendered at 20 Hz into a small multisampled HDR target, which is drawn into
 // the HUD's PiP slot every frame with the same tone mapping and exposure as the main view.
 import * as THREE from 'three';
 import { supportsHalfFloatTargets } from '../render/core/post';
 
 const HZ = 20;
-/** Helm seat, boat-local (X starboard, Y up, Z aft); X is mirrored to the windward side. */
-const EYE = { x: 0.95, y: 1.45, z: 2.3 };
+/**
+ * Where the camera sits relative to the telltales it watches, boat-local (X starboard, Y up, Z aft; X is mirrored
+ * to the windward side): close behind and a little to windward of the jib's luff, as if you leaned in to look.
+ */
+const OFFSET = { x: 0.55, y: -0.2, z: 1.25 };
+/** The yarns stream aft of their roots: aim a little behind them (m along the boat). */
+const LOOK_AFT = 0.12;
 const tmp = new THREE.Vector3();
 const dir = new THREE.Vector3();
 const size = new THREE.Vector2();
+const rot = new THREE.Matrix3();
 
 export interface PipRect { x: number; y: number; width: number; height: number }
 
@@ -84,25 +90,27 @@ export class TelltaleCam {
     this.target.dispose();
   }
 
-  /** Sit at the windward helm seat and frame every telltale with a little margin. */
+  /** Lean in close to the telltales (windward and leeward of one pair) and frame them with a little margin. */
   private aim(anchors: readonly THREE.Object3D[], boat: THREE.Object3D, windSide: number, aspect: number): void {
     const cam = this.camera;
-    cam.position.set(EYE.x * windSide, EYE.y, EYE.z).applyMatrix4(boat.matrixWorld);
     this.centre.set(0, 0, 0);
     for (const a of anchors) this.centre.add(a.getWorldPosition(tmp));
     this.centre.multiplyScalar(1 / anchors.length);
+    // The offset is given in the boat's frame, so the view heels and turns with the boat.
+    rot.setFromMatrix4(boat.matrixWorld);
+    cam.position.set(OFFSET.x * windSide, OFFSET.y, OFFSET.z).applyMatrix3(rot).add(this.centre);
+    dir.set(0, 0, LOOK_AFT).applyMatrix3(rot).add(this.centre);
     cam.up.set(0, 1, 0);
-    cam.lookAt(this.centre);
-    // Widest angle from the view axis to any telltale → vertical field of view (with the aspect).
-    dir.copy(this.centre).sub(cam.position).normalize();
+    cam.lookAt(dir);
+    // Widest angle from the view axis to any telltale root → field of view, with room for the streaming yarns.
+    dir.sub(cam.position).normalize();
     let maxAngle = 0;
     for (const a of anchors) {
       const d = a.getWorldPosition(tmp).sub(cam.position).normalize();
       maxAngle = Math.max(maxAngle, Math.acos(THREE.MathUtils.clamp(d.dot(dir), -1, 1)));
     }
-    // Margin for the yarns streaming aft of their roots.
-    const vertical = 2 * Math.atan(Math.tan(maxAngle * 1.25 + 0.03) / Math.min(1, aspect));
-    cam.fov = THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(vertical), 9, 50);
+    const vertical = 2 * Math.atan(Math.tan(maxAngle * 1.3 + 0.16) / Math.min(1, aspect));
+    cam.fov = THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(vertical), 20, 55);
     cam.aspect = aspect;
     cam.updateProjectionMatrix();
   }

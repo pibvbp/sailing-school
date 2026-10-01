@@ -366,7 +366,10 @@ export function luffTelltales(prefix: string, sections: readonly SailSection[], 
 export function leechTelltales(prefix: string, sections: readonly SailSection[], p: SailAeroParams, heights: readonly number[]): Telltale[] {
   return heights.map((h) => {
     const s = sectionAt(sections, h);
-    const aS = alphaStall(p, s.camber, s.draft) - 1 * DEG;
+    // The yarn at the leech stops streaming when its section stalls. Centred on the stall angle itself: a sail
+    // trimmed to the powerful end of the groove (the crew's upwind trim) still has its leech telltales flying,
+    // and only the sections that are really over-trimmed show it.
+    const aS = alphaStall(p, s.camber, s.draft);
     const stall = smoothstep(aS - 2 * DEG, aS + 2 * DEG, s.aoa);
     const state: Telltale['state'] = s.luffing > 0.6 ? 'fluttering' : stall > 0.5 ? 'stalled' : 'streaming';
     return { id: `${prefix}-leech-${Math.round(h * 100)}`, pos: surfacePoint(s, 1), side: 'leech', state, intensity: s.luffing > 0.6 ? s.luffing : stall };

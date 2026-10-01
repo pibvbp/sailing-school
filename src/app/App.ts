@@ -49,7 +49,8 @@ export function freeSailScenario(): ScenarioInit {
   return {
     wind: { tws: 12 * KN, twd: 225 * DEG, gustiness: 0.4, shiftAmplitude: 6 * DEG, shiftPeriod: 180, seed: 7 },
     boat: { psi: 165 * DEG, u: 2.6 },
-    controls: { helmMode: 'manual' },
+    // The autopilot holds the close reach until the learner touches the tiller (an untended boat would round up).
+    controls: { helmMode: 'twa', helmTarget: 60 * DEG },
   };
 }
 
@@ -100,7 +101,7 @@ export class App implements AppApi {
   private readonly soundscape = new Soundscape();
   private readonly camDir = new THREE.Vector3();
   private readonly camUp = new THREE.Vector3();
-  /** Jib luff telltales at 25 and 50 % height (port/stbd): the pairs a helmsman watches. */
+  /** The jib luff telltale pair at half height (port/stbd): the one a helmsman steers by. */
   private readonly jibTelltales: THREE.Object3D[];
   private readonly loop: FixedStepLoop;
   private readonly hud: Hud;
@@ -155,7 +156,7 @@ export class App implements AppApi {
     this.boat = new BoatModel(this.quality);
     this.sails = new SailsView(this.quality);
     this.boatRoot.add(this.boat.root, this.sails.root);
-    this.jibTelltales = this.sails.telltaleAnchors.slice(0, 4);
+    this.jibTelltales = this.sails.telltaleAnchors.slice(2, 4);
     this.lighting.follow(this.boatRoot);
     this.ov = new Overlays(this.scene, this.boatRoot, this.quality);
 
