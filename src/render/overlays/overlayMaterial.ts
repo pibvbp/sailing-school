@@ -153,6 +153,22 @@ export interface OverlayContext {
   camera: THREE.Camera | null;
 }
 
+/**
+ * What an overlay needs to place itself in the picture this frame: the camera, the viewport and the safe area (the
+ * part of the window the HUD leaves free) in CSS px, and how much further away than the chase camera the view is
+ * (`scale`: 1 at 17 m with the 50° lens, larger further off) — world-sized graphics are stretched by it to stay readable.
+ */
+export interface OverlayView {
+  camera: THREE.Camera | null;
+  width: number;
+  height: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  scale: number;
+}
+
 export type OverlayUniforms = {
   uOutMode: THREE.IUniform<number>;
   uExposure: THREE.IUniform<number>;

@@ -1,8 +1,20 @@
 // Lesson 10 — Keel, leeway and balance (spec §11.2): keel lift and leeway, heeling vs righting moment, weather
 // helm, depowering. Task: upwind in 16 kn with heel < 20° and helm < 6°.
+//
+// Each step shows only the forces its text talks about (the pair that balances sideways, then the righting couple,
+// then the rudder), with the x-ray water where the subject is under the boat: the keel and rudder drawn through the
+// hull, and at the keel the leeway picture — heading against track.
 import type { SimSnapshot } from '../../sim/types';
-import type { Lesson } from '../types';
-import { absTwa, autoTrim, fmt, frameDt, heelDeg, helmDeg, holdTwa, ramp, sailing, speedKn, step, together, upKey, view } from './helpers';
+import type { ForcePart, Lesson } from '../types';
+import {
+  absTwa, autoTrim, fmt, frameDt, heelDeg, helmDeg, holdTwa, ramp, sailing, speedKn, step, together, upKey, view, type StepDef,
+} from './helpers';
+
+/** While the step is shown, the Forces overlay draws only these pieces (and everything again once it is left). */
+const forceParts = (...parts: ForcePart[]): Pick<StepDef, 'onEnter' | 'onExit'> => ({
+  onEnter: (c) => c.app.setForceParts?.(parts),
+  onExit: (c) => c.app.setForceParts?.(null),
+});
 
 const MAX_HEEL = 20;
 const MAX_HELM = 6;
@@ -26,26 +38,30 @@ export const keelAndBalance: Lesson = {
   steps: [
     step({
       title: 'The keel is a wing too',
-      body: `<p>The sails' [[heeling-force|heeling force]] pushes the boat sideways, and the [[keel]] resists it. The water view (x-ray) shows how: the boat slides a few degrees sideways — its [[leeway]] — so the keel meets the water at a small angle of attack. Like a sail, it turns that into lift, pointing to windward.</p>
+      body: `<p>The sails' [[heeling-force|heeling force]] (the purple arrow) pushes the boat sideways, and the [[keel]] resists it. The water view (x-ray) shows how. The white arrow from under the bow is her heading, where she points; the yellow arrow is her track, where she actually goes, and astern yellow marks drift away along it. The small angle between the two is her [[leeway]].</p>
+<p>So the keel meets the water at a small angle of attack. Like a sail, it turns that into lift (the cyan arrow), pointing to windward.</p>
 <p>A keel needs speed: its lift grows with the square of the boat speed. Slow down, and the boat must slide further sideways before the keel can hold her — which is why pinching and stalled sails make you drift to leeward.</p>`,
       camera: 'chase',
       overlays: view('xray', 'forces'),
+      ...forceParts('heel', 'keel'),
       controls: ['helm'],
     }),
     step({
       title: 'Heeling and righting',
       body: `<p>The heeling force acts high on the sails and the keel's force low down under the water. Together they try to tip the boat over: the [[heeling-moment|heeling moment]].</p>
-<p>The boat fights back. Her weight pulls down through her centre of gravity, low thanks to the heavy keel, while the water pushes up through the centre of the underwater hull, which moves out to leeward as she heels. That pair is the [[righting-moment|righting moment]]; the crew sitting out on the high side ([[hiking]]) adds to it. The boat heels until the two moments balance.</p>`,
+<p>The boat fights back. Her weight (the gold arrow) pulls down through her centre of gravity, low thanks to the heavy keel, while the water pushes up — her buoyancy, the light-blue arrow — through the centre of the underwater hull, which moves out to leeward as she heels. That pair is the [[righting-moment|righting moment]]; the crew sitting out on the high side ([[hiking]]) adds to it. The boat heels until the two moments balance.</p>`,
       camera: 'chase',
       overlays: view('xray', 'forces'),
+      ...forceParts('heel', 'keel', 'righting'),
       controls: ['helm'],
     }),
     step({
       title: 'Weather helm',
       body: `<p>Heel changes the steering too. The sails' force moves out to leeward of the hull, and the heeled hull's shape tries to turn the bow toward the wind. To hold a straight course the rudder must push the other way: [[weather-helm|weather helm]], shown as the rudder angle on the instruments.</p>
-<p>A few degrees of weather helm is good — the boat tells you where the wind is, and the rudder adds a little lift. A lot is a brake. Too much, and the rudder loses its grip and the boat spins into the wind: a [[round-up]].</p>`,
+<p>The x-ray shows the rudder blade held over under the stern, and the pale arrow is the force on it; the tag at the tiller gives the helm angle. A few degrees of weather helm is good — the boat tells you where the wind is, and the rudder adds a little lift. A lot is a brake. Too much, and the rudder loses its grip and the boat spins into the wind: a [[round-up]].</p>`,
       camera: 'chase',
-      overlays: view('forces'),
+      overlays: view('xray', 'forces'),
+      ...forceParts('rudder', 'helm'),
       controls: ['helm'],
     }),
     step({
@@ -54,9 +70,10 @@ export const keelAndBalance: Lesson = {
 <ul><li>Flatten it: outhaul, backstay and cunningham in the trim panel's <em>Sail shape</em>.</li>
 <li>Drop the [[traveler]] to leeward (<kbd>Z</kbd>) — the boom goes out, the twist stays the same.</li>
 <li>Ease the mainsheet a little (<kbd>S</kbd>) so the top twists open and spills power.</li></ul>
-<p>The crew hikes out and trims the jib for you; the autopilot holds the course, so watch the heel and the rudder angle.</p>`,
+<p>The crew hikes out and trims the jib for you; the autopilot holds the course, so watch the heel, the purple heeling force and the helm tag at the tiller.</p>`,
       camera: 'chase',
       overlays: view('forces'),
+      ...forceParts('heel', 'helm'),
       controls: ['main', 'crew'],
       task: {
         label: `Upwind at ${MIN_SPEED} kn or more with heel under ${MAX_HEEL}° and helm under ${MAX_HELM}°, for 10 s`,
@@ -97,6 +114,7 @@ export const keelAndBalance: Lesson = {
 <p>When the wind builds, depower in this order: flatten the sails, drop the traveler, ease the sheet to add twist, and in the gusts steer a touch closer to the wind to spill power — [[feathering]]. Keep the crew's weight on the high side all the time.</p>`,
       camera: 'chase',
       overlays: view('xray', 'forces'),
+      ...forceParts('heel', 'keel', 'rudder', 'helm'),
     }),
   ],
   quiz: [

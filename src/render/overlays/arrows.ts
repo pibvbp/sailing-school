@@ -252,6 +252,19 @@ export class ArrowBatch {
     this.hidden.setX(i, style.hidden ?? 0.35);
   }
 
+  /** Arrows added since `begin()`. */
+  get size(): number {
+    return this.count;
+  }
+
+  /** The ends of arrow `i` (world space); false for an arrow that is not drawn (zero opacity). */
+  read(i: number, a: THREE.Vector3, b: THREE.Vector3): boolean {
+    if (i >= this.count || (this.color.array as Float32Array)[4 * i + 3]! <= 0) return false;
+    a.fromBufferAttribute(this.start, i);
+    b.fromBufferAttribute(this.end_, i);
+    return true;
+  }
+
   end(): void {
     this.geometry.instanceCount = this.count;
     for (let i = 0; i < this.attrs.length; i++) {

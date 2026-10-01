@@ -20,6 +20,13 @@ export const COLORS = {
   starboard: '#3ddc84',
   white: '#f4f7fb',
   noGo: '#ff5a4f',
+  // Angle-of-attack states, as the cloth colouring and the HUD's groove meter show them.
+  luffing: '#4aa8ff',
+  groove: '#34c77b',
+  stalled: '#ff5a4f',
+  // Leeway picture (x-ray): where the boat points, and where she actually goes through the water.
+  heading: '#f4f7fb',
+  track: '#ffe066',
 } as const;
 
 export type ColorKey = keyof typeof COLORS;

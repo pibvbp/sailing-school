@@ -17,6 +17,20 @@ export const OVERLAY_KEYS: readonly OverlayKey[] = [
   'windTriangle', 'forces', 'wheel', 'flow', 'flowSlice', 'aoa', 'xray', 'labels', 'laylines', 'track', 'telltaleCam',
 ];
 
+/**
+ * The pieces the Forces overlay can draw. A lesson step that talks about two arrows asks for just those
+ * (`AppApi.setForceParts`), so the picture shows what the text says and little else:
+ *  total — the red aerodynamic force; drive / heel — its green and purple parts along and across the boat;
+ *  liftDrag — each sail's lift and drag; windage; keel, rudder, resistance — the underwater forces; righting —
+ *  weight, buoyancy and their lever; helm — the helm-balance tag.
+ * `liftDrag` or `drive` asked for without `total` are drawn on the sail itself, as a textbook figure: the sail's
+ * section, the apparent wind arriving at its luff and, with the AoA overlay on, the angle of attack.
+ */
+export type ForcePart = 'total' | 'drive' | 'heel' | 'liftDrag' | 'windage' | 'keel' | 'rudder' | 'resistance' | 'righting' | 'helm';
+export const FORCE_PARTS: readonly ForcePart[] = [
+  'total', 'drive', 'heel', 'liftDrag', 'windage', 'keel', 'rudder', 'resistance', 'righting', 'helm',
+];
+
 /** A race mark placed by a lesson or mode (world metres east / north of the scenario origin). */
 export interface MarkSpec { id: string; e: number; n: number; kind: 'windward' | 'leeward' | 'start' }
 
@@ -24,6 +38,8 @@ export interface MarkSpec { id: string; e: number; n: number; kind: 'windward' |
 export interface AppApi {
   setMode(m: AppMode): void;
   setCamera(c: CameraKey): void;
+  /** The camera in use. Optional: with it, a lesson gives the learner's own camera back when it ends. */
+  cameraMode?(): CameraKey;
   setOverlay(k: OverlayKey, on: boolean): void;
   overlays(): Record<OverlayKey, boolean>;
   setWind(p: Partial<WindSettings>): void;
@@ -38,6 +54,17 @@ export interface AppApi {
   setMarks(marks: readonly MarkSpec[]): void;
   /** Height of the flow-slice overlay (m above the waterline). */
   setSliceHeight?(h: number): void;
+  /**
+   * Reduce the Forces overlay to the pieces a lesson step talks about; `null` shows them all again. Optional: a host
+   * without it shows every piece.
+   */
+  setForceParts?(parts: readonly ForcePart[] | null): void;
+  /**
+   * Distance (m) of the camera in use from the boat, within that camera's own zoom limits (chase, top and free; the
+   * others ignore it) — for a lesson step whose subject is small in the default framing. It lasts until the next
+   * `setCamera`. Optional: a host without it keeps the camera's default distance.
+   */
+  setCameraDistance?(metres: number): void;
   controls: Controls;
 }
 

@@ -1,8 +1,15 @@
 // Lesson 9 — Main and jib together (spec §11.2): upwash and downwash, backwinding, and why the "venturi" story
 // is wrong. Task: cause and fix a backwinded main.
+//
+// The whole lesson looks straight down on the flow slice — the one picture that shows both sails' sections and the
+// air between them. The trim steps add the angle-of-attack colours, which paint the sections blue / green / red.
 import type { SimSnapshot } from '../../sim/types';
-import type { Lesson } from '../types';
+import type { Lesson, LessonCtx } from '../types';
 import { fmt, frameDt, holdTwa, mainLuffBubble, ramp, sailing, step, together, trimOf, view } from './helpers';
+
+/** The top view from this height (m) fills the picture with the rig rather than the sea round it (where the app can zoom). */
+const CLOSE_UP_M = 38;
+const closeUp = (c: LessonCtx): void => c.app.setCameraDistance?.(CLOSE_UP_M);
 
 /** Backwinded, as the sim's detector defines it: the main's luff lifting while its leech still draws. */
 const backwinded = (s: SimSnapshot): boolean => {
@@ -19,26 +26,31 @@ export const mainAndJib: Lesson = {
   steps: [
     step({
       title: 'Two sails, one flow',
-      body: `<p>The two sails sit close together and change each other's airflow. A lifting sail bends the air before it arrives — [[upwash]] — and turns it as it leaves — [[downwash]]. Watch the flow slice: the streamlines curve toward the main's lee side well ahead of the mast.</p>
+      body: `<p>The two sails sit close together and change each other's airflow. A lifting sail bends the air before it arrives — [[upwash]] — and turns it as it leaves — [[downwash]].</p>
+<p>You are looking straight down on a slice of the air through the rig. The two bold white curves are the jib (ahead) and the mainsail where the slice cuts them; the fine lines are streamlines. Watch them curve toward the main's lee side well ahead of the mast: that is the upwash.</p>
 <p>The jib sits in the main's upwash, so it meets the wind from further aft than the boat's own apparent wind — it is lifted. The boat can therefore point higher before the jib's luff starts to lift.</p>`,
       camera: 'top',
-      overlays: view('flow', 'flowSlice'),
+      overlays: view('flowSlice'),
+      onEnter: closeUp,
       controls: ['helm'],
       autoTrim: { main: true, jib: true },
     }),
     step({
       title: 'The main pays for it',
       body: `<p>The main sits in the jib's downwash: the air leaving the jib's [[leech]] reaches the main from further forward. So the main must be sheeted closer to the centreline than the jib, and the front of the main is the first part of it to luff.</p>
-<p>What the [[slot]] does <em>not</em> do is act as a nozzle that speeds the air up and sucks the main along. That "venturi" story is wrong: measurements show the air near the main's lee side just behind the mast actually slows down when a jib is set. The sails help each other through the way each one bends the other's flow.</p>`,
+<p>What the [[slot]] does <em>not</em> do is act as a nozzle that speeds the air up and sucks the main along. That "venturi" story is wrong: measurements show the air near the main's lee side just behind the mast actually slows down when a jib is set. In the slice the strongest suction (blue) sits on the lee side of the jib's luff, not in the slot. The sails help each other through the way each one bends the other's flow.</p>`,
       camera: 'top',
-      overlays: view('flow', 'flowSlice'),
+      overlays: view('flowSlice'),
+      onEnter: closeUp,
       controls: ['helm'],
     }),
     step({
       title: 'Cause backwinding',
-      body: `<p>Over-trim the jib (<kbd>↑</kbd>) and ease the main a little (<kbd>S</kbd>). The jib's downwash grows until the air hits the back of the main's luff: the front of the main bulges and flaps while its leech still draws. That is [[backwinding]].</p>`,
+      body: `<p>Over-trim the jib (<kbd>↑</kbd>) and ease the main a little (<kbd>S</kbd>). The jib's downwash grows until the air hits the back of the main's luff: the front of the main bulges and flaps while its leech still draws. That is [[backwinding]].</p>
+<p>The two sections now show how each sail is working, in the groove meter's colours: green in the groove, blue where it luffs, red where it stalls. Watch the mainsail's section turn blue.</p>`,
       camera: 'top',
-      overlays: view('flow', 'flowSlice', 'aoa'),
+      overlays: view('flowSlice', 'aoa'),
+      onEnter: closeUp,
       controls: ['mainSheet', 'jibSheet'],
       autoTrim: { main: false, jib: false },
       task: {
@@ -71,12 +83,13 @@ export const mainAndJib: Lesson = {
     }),
     step({
       title: 'Fix it',
-      body: `<p>The jib is pulled in hard and the main is eased, so the main's luff is lifting. Fix it the way a crew does: ease the jib a touch (<kbd>↓</kbd>) until its telltales stream, then trim the main (<kbd>W</kbd>) until its luff is full and the sail is in the groove. Trim the jib first, then set the main to match it.</p>`,
+      body: `<p>The jib is pulled in hard and the main is eased, so the main's luff is lifting. Fix it the way a crew does: ease the jib a touch (<kbd>↓</kbd>) until its telltales stream, then trim the main (<kbd>W</kbd>) until its luff is full and the sail is in the groove — both sections green. Trim the jib first, then set the main to match it.</p>`,
       camera: 'top',
-      overlays: view('flow', 'flowSlice', 'aoa'),
+      overlays: view('flowSlice', 'aoa'),
       controls: ['mainSheet', 'jibSheet', 'autoTrim'],
       // Start from the broken trim, whether or not the step before was done.
       onEnter: (c) => {
+        closeUp(c);
         const k = c.app.controls;
         Object.assign(k.autoTrim, { main: false, jib: false });
         k.jibSheet = 1;

@@ -9,14 +9,27 @@ import { guard, hit } from './flowParticles';
 import type { Label, LabelLayer } from './labels';
 import { LineBatch } from './lines';
 import { OVERLAY_COMMON, OVERLAY_OUTPUT, bindOverlayMesh, overlayUniforms, type OverlayContext } from './overlayMaterial';
+import { COLORS } from './palette';
 import { FLOW_COLORS } from './trails';
 
 export const SLICE_MIN_H = 1.8;
 export const SLICE_MAX_H = 9.6;
+/** Streamline spacing (m) seen from close by; from further away fewer, finer lines are traced (see `update`). */
 const LINE_SPACING = 0.5;
 const STREAM_MARGIN = 3.2;
 /** Streamlines: a faint continuous line with bright pulses travelling at half the local air speed (coord = seconds). */
 const STREAM_STYLE = { width: 1.7, alpha: 0.95, dash: 0.5, duty: 0.3, dashSpeed: 0.5, dashFloor: 0.32 };
+/** The same from a distant camera (the top view): finer and quieter, so the sails' sections and the hull show. */
+const STREAM_STYLE_FAR = { width: 1.25, alpha: 0.8, dash: 0.5, duty: 0.3, dashSpeed: 0.5, dashFloor: 0.2 };
+/** The sails' cut sections: a dark casing under a bright line, so they stand out from the streamlines. */
+const CLOTH_CASING = { width: 10.5, alpha: 0.85 };
+const CLOTH_STYLE = { width: 4.6, alpha: 1 };
+/** Section colours while the angle-of-attack colouring is on: luffing, in the groove, stalled (as the cloth and the HUD). */
+const AOA_LUFF = new THREE.Color(COLORS.luffing);
+const AOA_OK = new THREE.Color(COLORS.groove);
+const AOA_STALL = new THREE.Color(COLORS.stalled);
+/** How far (px) the Suction / Pressure tags stand off their peaks. */
+const CALLOUT_PX = 40;
 /** RK2 step (m) — a little under half the grid spacing — and the longest streamline in steps. */
 const STEP = 0.15;
 const MAX_STEPS = 150;
@@ -120,10 +133,15 @@ export class FlowSlice {
   private readonly smp: FlowSample = { u: 0, v: 0, ratio: 1, turb: 0 };
   private readonly white = new THREE.Color('#ffffff');
   private readonly clothColor = new THREE.Color('#ffffff');
+  private readonly casingColor = new THREE.Color('#04101f');
+  private spacing = LINE_SPACING;
+  private aoa = false;
+  private quiet = false;
   private readonly tagLabel: Label;
   private readonly lowLabel: Label;
   private readonly highLabel: Label;
   private readonly tmp = new THREE.Vector3();
+  private readonly tmp2 = new THREE.Vector3();
   private readonly low = { x: 0, y: 0, cp: 0 };
   private readonly high = { x: 0, y: 0, cp: 0 };
   private seenVersion = -1;
@@ -178,12 +196,16 @@ export class FlowSlice {
     });
     this.plane = this.planes[1]!;
     this.stream = new LineBatch(ctx, 4096, { renderOrder: 17, hiddenAlpha: 0.5 });
-    this.cloth = new LineBatch(ctx, 128, { renderOrder: 18, hiddenAlpha: 0.55, depthBiasC: 0.25 });
+    // Seen from above, the sail's upper part lies over its own cut: the sections are drawn through the cloth at
+    // nearly full strength (they are the subject of the picture).
+    this.cloth = new LineBatch(ctx, 128, { renderOrder: 18, hiddenAlpha: 0.92, depthBiasC: 0.25 });
     this.group.add(...this.planes, this.stream.group, this.cloth.group);
     this.group.name = 'overlay-flow-slice';
     this.tagLabel = layer.create({ kind: 'tag', color: '#f4f7fb', priority: 6 });
-    this.lowLabel = layer.create({ color: '#8fd0ff', priority: 5 });
-    this.highLabel = layer.create({ color: '#ffb08a', priority: 5 });
+    // Callouts: the tags stand off the sail (to leeward of the suction peak, to windward of the pressure peak) with a
+    // leader line, so they never cover the section they describe.
+    this.lowLabel = layer.create({ color: '#8fd0ff', priority: 5, leader: true });
+    this.highLabel = layer.create({ color: '#ffb08a', priority: 5, leader: true });
     this.setHeight(height);
   }
 
@@ -195,11 +217,33 @@ export class FlowSlice {
   }
 
   /**
-   * Per frame: fade in (real time `dt`), animate the churn and the streamline pulses (air time `flowDt`, frozen while
-   * paused), pick up a rebuilt field. `toWorld` maps body points to world for the labels.
+   * Leave the slice's own tags out (its height and speed, the suction and pressure peaks): the picture's subject is
+   * something drawn on top of it — the lift/drag figure of the Forces overlay — and its tags are the ones to read.
    */
-  update(dt: number, flowDt: number, toWorld: (x: number, y: number, z: number, out: THREE.Vector3) => THREE.Vector3): void {
+  setQuiet(quiet: boolean): void {
+    this.quiet = quiet;
+  }
+
+  /** Colour the sails' sections by their angle of attack (blue luffing, green in the groove, red stalled). */
+  setAoaColouring(on: boolean): void {
+    if (on === this.aoa) return;
+    this.aoa = on;
+    if (this.seenVersion > 0) this.drawCloth();
+  }
+
+  /**
+   * Per frame: fade in (real time `dt`), animate the churn and the streamline pulses (air time `flowDt`, frozen while
+   * paused), pick up a rebuilt field. `toWorld` maps body points to world for the labels. `viewScale` (1 at the chase
+   * camera's distance, larger further away) thins the streamlines out for a distant camera.
+   */
+  update(dt: number, flowDt: number, toWorld: (x: number, y: number, z: number, out: THREE.Vector3) => THREE.Vector3, viewScale = 1): void {
     this.time += flowDt;
+    // Lines 0.5 m apart are 10 px apart from 70 m up — hatching that hides the boat. Trace them further apart there.
+    const spacing = LINE_SPACING * Math.min(2.5, Math.max(1, Math.round(viewScale * 3) / 4));
+    if (spacing !== this.spacing) {
+      this.spacing = spacing;
+      if (this.seenVersion > 0) this.startTrace();
+    }
     const u = this.material.uniforms;
     u['uTime']!.value = this.time;
     u['uAlpha']!.value = Math.min(1, (u['uAlpha']!.value as number) + dt * 3);
@@ -211,17 +255,38 @@ export class FlowSlice {
       this.startTrace();
     }
     if (this.tracing) this.traceSome();
+    if (this.quiet) {
+      this.tagLabel.hide();
+      this.lowLabel.hide();
+      this.highLabel.hide();
+      return;
+    }
     const f = this.field;
     toWorld(f.x1 - 1.2, f.y0 + 1.5, -this.height, this.tmp);
     this.tagLabel.text('Flow slice', `${this.height.toFixed(1)} m up · ${(f.speed / 0.514444).toFixed(1)} kn`).at(this.tmp, 0, 0);
     if (this.low.cp < -0.3) {
-      toWorld(this.low.x, this.low.y, -this.height, this.tmp);
-      this.lowLabel.text('Suction', `Cp ${this.low.cp.toFixed(1)}`).at(this.tmp, 0, -20);
+      this.callout(this.lowLabel.text('Suction', `Cp ${this.low.cp.toFixed(1)}`), this.low.x, this.low.y, 1, toWorld);
     } else this.lowLabel.hide();
     if (this.high.cp > 0.3) {
-      toWorld(this.high.x, this.high.y, -this.height, this.tmp);
-      this.highLabel.text('Pressure', `Cp +${this.high.cp.toFixed(1)}`).at(this.tmp, 0, 20);
+      this.callout(this.highLabel.text('Pressure', `Cp +${this.high.cp.toFixed(1)}`), this.high.x, this.high.y, -1, toWorld);
     } else this.highLabel.hide();
+  }
+
+  /**
+   * Anchor a tag at a point of the slice (body x, y) and stand it off toward the lee side (`side` = 1) or the
+   * windward side (−1) of the nearest sail section.
+   */
+  private callout(label: Label, x: number, y: number, side: number, toWorld: (x: number, y: number, z: number, out: THREE.Vector3) => THREE.Vector3): void {
+    const f = this.field;
+    let nx = 0, ny = side, best = Infinity;
+    for (let e = 0; e < f.count; e++) {
+      const el = f.elements[e]!;
+      const mx = 0.5 * (el.leX + el.teX) - x, my = 0.5 * (el.leY + el.teY) - y;
+      const d = mx * mx + my * my;
+      if (d < best) { best = d; nx = el.nX * side; ny = el.nY * side; }
+    }
+    toWorld(x - nx, y - ny, -this.height, this.tmp2);
+    label.tip(toWorld(x, y, -this.height, this.tmp), this.tmp2, CALLOUT_PX);
   }
 
   hide(): void {
@@ -284,7 +349,7 @@ export class FlowSlice {
       }
     }
     this.seeds = 0;
-    for (let sc = sMin - STREAM_MARGIN; sc <= sMax + STREAM_MARGIN + 1e-6 && this.seeds < MAX_LINES; sc += LINE_SPACING) {
+    for (let sc = sMin - STREAM_MARGIN; sc <= sMax + STREAM_MARGIN + 1e-6 && this.seeds < MAX_LINES; sc += this.spacing) {
       // Start on the upstream edge of the grid.
       let x = 0.75 * ux + sc * nx, y = 0.75 * uy + sc * ny;
       for (let back = 0; back < 200 && f.inBounds(x - ux * 0.2, y - uy * 0.2); back++) { x -= ux * 0.2; y -= uy * 0.2; }
@@ -308,10 +373,11 @@ export class FlowSlice {
     this.tracing = false;
     this.stream.begin();
     const stride = MAX_STEPS + 2;
+    const style = this.spacing > 1.5 * LINE_SPACING ? STREAM_STYLE_FAR : STREAM_STYLE;
     for (let i = 0; i < this.seeds; i++) {
       const n = this.traceCount[i]!;
       if (n > 4) {
-        this.stream.add(this.tracePts.subarray(3 * i * stride, 3 * (i * stride + n)), n, this.white, STREAM_STYLE,
+        this.stream.add(this.tracePts.subarray(3 * i * stride, 3 * (i * stride + n)), n, this.white, style,
           this.traceCoords.subarray(i * stride, i * stride + n), this.traceAlphas.subarray(i * stride, i * stride + n));
       }
     }
@@ -353,18 +419,30 @@ export class FlowSlice {
     this.traceCount[i] = n;
   }
 
-  /** The sails cut at this height, drawn as bold white sections. */
+  /**
+   * The sails cut at this height: bold sections on a dark casing — white, or with the angle-of-attack colouring on,
+   * blue where the cut luffs, green in the groove, red where it is stalled.
+   */
   private drawCloth(): void {
     const f = this.field;
     this.cloth.begin();
-    for (let e = 0; e < f.count; e++) {
-      const el = f.elements[e]!;
-      for (let k = 0; k < CAMBER_PTS; k++) {
-        this.buf[3 * k] = el.pts[2 * k + 1]!;
-        this.buf[3 * k + 1] = this.height + 0.04;
-        this.buf[3 * k + 2] = -el.pts[2 * k]!;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let e = 0; e < f.count; e++) {
+        const el = f.elements[e]!;
+        for (let k = 0; k < CAMBER_PTS; k++) {
+          this.buf[3 * k] = el.pts[2 * k + 1]!;
+          this.buf[3 * k + 1] = this.height + (pass === 0 ? 0.03 : 0.05);
+          this.buf[3 * k + 2] = -el.pts[2 * k]!;
+        }
+        if (pass === 0) { this.cloth.add(this.buf, CAMBER_PTS, this.casingColor, CLOTH_CASING); continue; }
+        if (this.aoa) {
+          const luff = Math.min(1, Math.max(0, el.luffing * 1.6)), stall = Math.min(1, Math.max(0, el.stall * 1.6));
+          this.clothColor.copy(AOA_OK).lerp(AOA_LUFF, luff).lerp(AOA_STALL, stall);
+        } else {
+          this.clothColor.set(1, 1, 1);
+        }
+        this.cloth.add(this.buf, CAMBER_PTS, this.clothColor, CLOTH_STYLE);
       }
-      this.cloth.add(this.buf, CAMBER_PTS, this.clothColor, { width: 4.5, alpha: 0.95, glow: 3 });
     }
     this.cloth.end();
   }

@@ -7,6 +7,12 @@ import * as THREE from 'three';
 import { gradientFactor, puffInfluence } from '../../sim/wind';
 import type { Puff, SimSnapshot } from '../../sim/types';
 
+/**
+ * Length of (x, y). Per-frame code uses this instead of `Math.hypot`, which in V8 copies its arguments into a fresh
+ * array on every call (~24 bytes of garbage each) — the overlays must not allocate per frame.
+ */
+export const hyp = (x: number, y: number): number => Math.sqrt(x * x + y * y);
+
 /** The boat root's world transform, for converting body-frame points and vectors to world space. */
 export class BoatFrame {
   readonly matrix = new THREE.Matrix4();
