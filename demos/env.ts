@@ -19,6 +19,8 @@ import { createBloom, HdrFxaaEffect, HdrGuardEffect, PostChain, VibranceEffect, 
 import { QualityGovernor, tierSettings, type QualityTier } from '../src/render/core/quality';
 import { FrameTimer } from '../src/render/core/frameTimer';
 import { ATMOSPHERE, SkySystem } from '../src/render/env/sky';
+import { panoDirection, panoDisc } from '../src/render/env/cloudField';
+import { cloudNoiseGenerationMs } from '../src/render/env/cloudNoise';
 import { Lighting } from '../src/render/env/lighting';
 import { Land } from '../src/render/env/land';
 import { Marks } from '../src/render/env/marks';
@@ -52,8 +54,17 @@ const renderer = createRenderer(canvas);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(num('fov', 50), innerWidth / innerHeight, 0.1, 40000);
 
-const sky = new SkySystem(renderer, scene, quality, { hours: hour, cloudCover: num('clouds', 0.35) });
+const sky = new SkySystem(renderer, scene, quality, { hours: hour, cloudCover: num('clouds', 0.35), volumetricClouds: params.get('volumetric') !== '0' });
 sky.meteringWeight = metering;
+// Volumetric cloud tuning: ?cl_<lighting key>= and ?cf_<field key>= (e.g. cl_multiScatter=0.6&cf_erosion=0.9).
+if (sky.volumetric) {
+  const v = sky.volumetric;
+  const lighting = v.lighting as unknown as Record<string, number>;
+  for (const key of Object.keys(lighting)) lighting[key] = num(`cl_${key}`, lighting[key]!);
+  const field = v.field.params as unknown as Record<string, number>;
+  for (const key of Object.keys(field)) field[key] = num(`cf_${key}`, field[key]!);
+  v.renderAll(new THREE.Vector3(0, num('height', 2.6), 0), sky.sunDirection);
+}
 {
   const cp = sky.clouds.params;
   cp.scale = num('cscale', cp.scale);
@@ -332,6 +343,182 @@ function benchmark(dt: number): Record<string, number> {
 }
 
 /**
+ * ?envcheck=1: the strip-wise environment bake must give the texture three's one-call bake gives. Bakes both ways
+ * from the same sky in the same frame and compares every texel of the CubeUV target.
+ */
+function checkEnvironmentBake(): Record<string, number> {
+  const s = sky as unknown as {
+    pmremTarget: THREE.WebGLRenderTarget;
+    envBaker: { busy: boolean; unitCount: number; step(): boolean };
+    bakeEnvironment(): void;
+    beginEnvironmentBake(): void;
+  };
+  const read = (): Uint16Array => {
+    const t = s.pmremTarget;
+    const buf = new Uint16Array(t.width * t.height * 4);
+    renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, buf);
+    return buf;
+  };
+  s.bakeEnvironment();
+  const whole = read();
+  s.beginEnvironmentBake();
+  let steps = 0;
+  while (s.envBaker.busy && steps < 1000) { s.envBaker.step(); steps++; }
+  const strips = read();
+  renderer.setRenderTarget(null);
+  let worst = 0;
+  let differing = 0;
+  let peak = 0;
+  for (let i = 0; i < whole.length; i++) {
+    const a = THREE.DataUtils.fromHalfFloat(whole[i]!);
+    const b = THREE.DataUtils.fromHalfFloat(strips[i]!);
+    if (whole[i] !== strips[i]) differing++;
+    worst = Math.max(worst, Math.abs(a - b));
+    peak = Math.max(peak, Math.abs(a));
+  }
+  return { steps, units: s.envBaker.unitCount, texels: whole.length / 4, differingValues: differing, worstAbsDifference: worst, peakValue: peak };
+}
+
+/**
+ * ?suncheck=1: the CPU mirror of the cloud field (which dims the sun light) against the GPU march (which draws the
+ * clouds). Marches a fresh panorama, reads it back and compares its transmittance with the CPU's along the same
+ * rays, over a grid of directions.
+ */
+function checkSunConsistency(): Record<string, number> {
+  const v = sky.volumetric;
+  if (!v) return {};
+  const eye = camera.position.clone();
+  v.renderAll(eye, sky.sunDirection);
+  const target = v.newest;
+  const size = target.width;
+  const buf = new Uint16Array(size * size * 4);
+  renderer.readRenderTargetPixels(target, 0, 0, size, size, buf);
+  renderer.setRenderTarget(null);
+  const disc = panoDisc(size);
+  const dir = { x: 0, y: 0, z: 0 };
+  let n = 0;
+  let sumAbs = 0;
+  let worst = 0;
+  let agree = 0;
+  let covered = 0;
+  let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+  const stride = Math.floor(size / 48);
+  for (let j = stride >> 1; j < size; j += stride) {
+    for (let i = stride >> 1; i < size; i += stride) {
+      const u = (i + 0.5) / size;
+      const w = (j + 0.5) / size;
+      if (Math.hypot(u - 0.5, w - 0.5) * 2 > disc * 0.97) continue;
+      panoDirection(u, w, disc, dir);
+      const gpu = THREE.DataUtils.fromHalfFloat(buf[(j * size + i) * 4 + 3]!);
+      // The march exactly as the per-frame sun light runs it (its default step count).
+      const cpu = v.field.viewTransmittance(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z);
+      n++;
+      sumAbs += Math.abs(gpu - cpu);
+      worst = Math.max(worst, Math.abs(gpu - cpu));
+      if ((gpu < 0.5) === (cpu < 0.5)) agree++;
+      if (cpu < 0.5) covered++;
+      sa += gpu; sb += cpu; saa += gpu * gpu; sbb += cpu * cpu; sab += gpu * cpu;
+    }
+  }
+  const cov = sab / n - (sa / n) * (sb / n);
+  const correlation = cov / Math.sqrt(Math.max(1e-12, (saa / n - (sa / n) ** 2) * (sbb / n - (sb / n) ** 2)));
+  return { rays: n, meanAbsDifference: sumAbs / n, worstDifference: worst, sameSideOfHalf: agree / n, coveredFraction: covered / n, correlation };
+}
+
+/**
+ * ?bench=clouds: GPU cost of the volumetric clouds, measured as the brief asks: real frames that close their
+ * passes, best of several interleaved rounds, clouds on against off in the same run.
+ *   frame*Ms       a whole frame (post chain to the canvas) with and without one frame's cloud tiles before it
+ *   generationMs   every tile and the resolve in one batch with a single sync: GPU-bound, so it holds up when
+ *                  the machine's CPUs are busy (the frame figures do not: a CPU-bound loop hides GPU work)
+ *   resolveMs      the resolve pass alone (once per generation)
+ */
+function benchmarkClouds(dt: number): Record<string, number> {
+  const v = sky.volumetric;
+  const out: Record<string, number> = {};
+  if (!v) return out;
+  const n = v.tileCount;
+  const perFrame = v.quality.tilesPerFrame;
+  const frames = Math.ceil(n / perFrame);
+  const frame = () => { post.render(dt); closeFrame(); };
+  let tile = 0;
+  const frameWithTiles = () => { v.benchMarch(tile, perFrame, false); tile += perFrame; frame(); };
+  let off = Infinity;
+  let on = Infinity;
+  for (let r = 0; r < 7; r++) {
+    off = Math.min(off, timeGpu(frames, true, frame));
+    tile = 0;
+    on = Math.min(on, timeGpu(frames, true, frameWithTiles));
+  }
+  out['frameCloudsOffMs'] = off;
+  out['frameCloudsOnMs'] = on;
+  out['cloudWorkPerFrameMs'] = on - off;
+
+  out['tiles'] = n;
+  out['panoramaSize'] = v.quality.size;
+
+  let generation = Infinity;
+  for (let r = 0; r < 7; r++) {
+    const target = v.benchMarch(0, n, true);
+    generation = Math.min(generation, timeGpu(2, target, () => { v.benchMarch(0, n, true); }));
+  }
+  out['generationMs'] = generation;
+  out['framesPerGeneration'] = frames;
+  out['generationPerFrameMs'] = generation / frames;
+
+  let resolve = Infinity;
+  for (let r = 0; r < 5; r++) {
+    const target = v.benchMarch(0, 0, true);
+    resolve = Math.min(resolve, timeGpu(3, target, () => { v.benchMarch(0, 0, true); closeFrame(); }));
+  }
+  out['resolveMs'] = resolve;
+  out['amortisedPerFrameMs'] = out['cloudWorkPerFrameMs']! + resolve / frames;
+
+  // The environment bake: three's one call against the strip-wise units (each timed with its own sync).
+  const s = sky as unknown as {
+    pmremTarget: THREE.WebGLRenderTarget;
+    envBaker: { busy: boolean; step(): boolean };
+    bakeEnvironment(): void;
+    beginEnvironmentBake(): void;
+  };
+  const sync = () => renderer.readRenderTargetPixels(s.pmremTarget, 0, 0, 1, 1, pixel16);
+  let whole = Infinity;
+  let unitWorst = Infinity;
+  let unitSum = Infinity;
+  let units = 0;
+  for (let r = 0; r < 4; r++) {
+    s.bakeEnvironment();
+    sync();
+    let t0 = performance.now();
+    s.bakeEnvironment();
+    sync();
+    whole = Math.min(whole, performance.now() - t0);
+    s.beginEnvironmentBake();
+    let roundWorst = 0;
+    let roundSum = 0;
+    units = 0;
+    while (s.envBaker.busy && units < 200) {
+      t0 = performance.now();
+      s.envBaker.step();
+      closeFrame();
+      sync();
+      const ms = performance.now() - t0;
+      roundWorst = Math.max(roundWorst, ms);
+      roundSum += ms;
+      units++;
+    }
+    unitWorst = Math.min(unitWorst, roundWorst);
+    unitSum = Math.min(unitSum, roundSum);
+  }
+  renderer.setRenderTarget(null);
+  out['envBakeOneCallMs'] = whole;
+  out['envBakeUnits'] = units;
+  out['envBakeUnitWorstMs'] = unitWorst;
+  out['envBakeUnitMeanMs'] = unitSum / Math.max(1, units);
+  return out;
+}
+
+/**
  * ?bench=post: real-frame cost of post-chain layouts versus the same frame without post. Every case ends its
  * frame the way a real frame does (the canvas pass is closed, so tile stores are paid), all cases are
  * interleaved within each round, and each figure is the best round (outside GPU load only adds time).
@@ -407,6 +594,8 @@ resize();
 const drift = num('drift', 0);
 const benchMode = params.has('bench');
 let bench: Record<string, number> | undefined;
+let envCheck: Record<string, number> | undefined;
+let sunCheck: Record<string, number> | undefined;
 renderer.info.autoReset = false;
 if (drift > 0) sky.update(drift, camera, windFrom, windSpeed);
 
@@ -442,7 +631,21 @@ renderer.setAnimationLoop((now) => {
   ripples.offset.set(t * 0.004 * Math.sin(windFrom + Math.PI), t * 0.004 * Math.cos(windFrom + Math.PI));
   if (exposureBias !== 1) renderer.toneMappingExposure = sky.exposure * exposureBias;
 
-  if (benchMode && frames === 40) bench = params.get('bench')!.startsWith('post') ? benchmarkPostLayouts() : benchmark(dt);
+  // ?tierflip=1: down to the low tier (2-D cloud layer) and back, then through medium and ultra.
+  if (params.get('tierflip') === '1') {
+    const flips: Record<number, QualityTier> = { 40: 'low', 80: 'high', 120: 'medium', 160: 'ultra', 200: 'high' };
+    const next = flips[frames];
+    if (next) {
+      sky.setQuality(tierSettings(next));
+      tierLog.push(`frame ${frames}→${next}${sky.volumetric ? ` (${sky.volumetric.quality.size})` : ' (2-D)'}`);
+    }
+  }
+  if (params.get('envcheck') === '1' && frames === 20) envCheck = checkEnvironmentBake();
+  if (params.get('suncheck') === '1' && frames === 20) sunCheck = checkSunConsistency();
+  if (benchMode && frames === 40) {
+    const mode = params.get('bench')!;
+    bench = mode.startsWith('post') ? benchmarkPostLayouts() : mode === 'clouds' ? benchmarkClouds(dt) : benchmark(dt);
+  }
   renderer.info.reset();
   post.render(dt);
   frameTimer.end();
@@ -453,6 +656,7 @@ renderer.setAnimationLoop((now) => {
     if (autoQuality) {
       post.setQuality(governor.settings);
       lighting.setQuality(governor.settings);
+      sky.setQuality(governor.settings);
     }
   }
   frames++;
@@ -462,7 +666,8 @@ renderer.setAnimationLoop((now) => {
     window.__env = {
       hour: sky.hours, exposure: sky.exposure, incidentExposure: sky.incidentExposure, sunIntensity: sky.sunIntensity, sunColor: sky.sunColor.toArray(),
       fogColor: sky.fogColor.toArray(), horizonColor: sky.horizonColor.toArray(), skyIlluminance: sky.skyIlluminance,
-      bench, cpuMs: { ...cpu }, tier: governor.settings.tier,
+      bench, envCheck, sunCheck, cpuMs: { ...cpu }, cloudNoiseMs: cloudNoiseGenerationMs(), cloudGenerations: sky.volumetric?.generations ?? 0,
+      cloudSun: sky.sunIntensity, tier: governor.settings.tier,
       frameCost: { ms: frameTimer.cost.ms, gpu: frameTimer.cost.gpu, cpuMs: frameTimer.cpuMs, gpuMs: frameTimer.gpuMs },
       tierLog: [...tierLog],
       postHdr: post.hdr, calls: info.calls, triangles: info.triangles,

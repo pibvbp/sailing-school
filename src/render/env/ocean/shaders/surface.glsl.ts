@@ -61,15 +61,19 @@ void main() {
 const ENV_LOOKUP_GLSL = /* glsl */ `
 uniform sampler2D uEnvEquirect;
 uniform float uEnvWidth;
-/** Sky radiance around direction d for a GGX lobe of width alpha (radians). */
-vec3 skyReflection(vec3 d, float alpha) {
+/** Sky radiance around direction d, averaged over a patch of sky about 2 × spread radians across. */
+vec3 skyReflection(vec3 d, float spread) {
   vec2 uv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5, sqrt(clamp(d.y, 0.0, 1.0)));
-  float lod = log2(max(alpha * 0.6 * uEnvWidth / 6.2831853, 1.0));
+  float lod = log2(max(spread * uEnvWidth / 6.2831853, 1.0));
   return textureLod(uEnvEquirect, uv, lod).rgb;
 }
 `;
 
-/** Deep water under the x-ray window: the body colour the surface would have shown. */
+/**
+ * The water seen through the x-ray window. Not the deep-sea body colour (a dark hull over dark water shows nothing):
+ * lit like clear water over pale sand, so the hull's bottom, the keel and the rudder stand out against it. It is a
+ * teaching view — clarity beats realism here.
+ */
 export const BACKDROP_VERT = /* glsl */ `
 uniform sampler2D uSkyLight;
 varying vec3 vSkyAmb;
@@ -87,7 +91,10 @@ uniform vec3 uWaterAbsorb;
 varying vec3 vSkyAmb;
 void main() {
   vec3 beam = uSunRadiance * max(uSunDir.y, 0.0) * 0.97 / 3.14159265;
-  gl_FragColor = vec4((uWaterScatter * (beam + vSkyAmb * 0.94) + uWaterAbsorb * vSkyAmb * 0.8) * 1.15, 1.0);
+  vec3 light = beam + vSkyAmb * 0.94;
+  vec3 deep = (uWaterScatter * light + uWaterAbsorb * vSkyAmb * 0.8) * 1.15;
+  vec3 clear = vec3(0.03, 0.135, 0.175) * light;
+  gl_FragColor = vec4(mix(deep, clear, 0.85), 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
@@ -403,12 +410,14 @@ void main() {
   float breakingNow = max(t0.b, t1.b * 0.8);
   // Bubble plumes are local and short-lived: only the dense part under recent breaking counts.
   float bubbles = smoothstep(0.05, 0.5, max(t0.g, t1.g)) * 0.6 + wake.g * 0.9;
-  // The active cap sits on the upper, leeward face of the crest (fine-scale shape from the surface).
-  float crestMask = smoothstep(-0.1, 0.45, vWaveY / max(uHs * 0.5, 0.05));
+  // The active cap sits on the upper, leeward face of the crest (fine-scale shape from the surface): a band along
+  // the top of the wave, not the whole of its back.
+  float crestMask = smoothstep(0.15, 0.75, vWaveY / max(uHs * 0.5, 0.05));
   float front = smoothstep(-0.02, 0.12, -dot(slope, uWindDirTo));
-  // Coverage: an actively breaking cap is nearly solid; residual foam is lace that thins as it decays.
-  float activeCap = smoothstep(0.03, 0.25, breakingNow) * crestMask * (0.4 + 0.6 * front);
-  float residual = 0.6 * smoothstep(0.03, 0.9, rawFoam);
+  // Coverage: only the tumbling front of a breaker is nearly solid, a band along the crest and not the whole patch
+  // that is breaking a little; the foam it leaves behind is lace that thins as it decays.
+  float activeCap = smoothstep(0.10, 0.55, breakingNow) * crestMask * (0.4 + 0.6 * front);
+  float residual = 0.5 * smoothstep(0.05, 0.9, rawFoam);
   float foamMask = (max(activeCap, residual) + 0.3 * min(activeCap, residual)) * (1.0 + max(gust, 0.0));
   float wakeDensity = max(max(wake.r, kelvinFoam), hullBreak);
   // Foam organises into streaks along the wind (Langmuir windrows), so every foam lookup is stretched
@@ -438,11 +447,17 @@ void main() {
       // cells + wind streaks) turns white, so even dense foam keeps its holes and ragged edges.
       vec4 fx0 = textureGrad(uFoamTex, qsr * 0.031 * stretch + uOffFoamA.xy, gx * 0.031 * stretch, gy * 0.031 * stretch);
       float lace = fx2.r * 0.45 + fx1.a * 0.3 + fx0.a * 0.25;
-      // Filtering averages distant caps away; boost coverage with the footprint to keep them.
-      float cover = clamp(foamMask * mix(1.0, 1.8, smoothstep(0.3, 3.0, fpShade)), 0.0, 0.8);
+      // Past a few metres a pixel no longer resolves the lace, and its filtered value tends to the pattern's mean.
+      // Thresholding that would paint a whole patch white with a hard outline — an ice floe. So the threshold
+      // widens with the footprint into what the pixel really holds, the fraction of its lace that is white: old
+      // foam fades out toward its edges, and only a crest breaking right now stays dense. That part is boosted
+      // a little with distance, so that white horses carry to the horizon.
+      float unresolved = smoothstep(0.02, 0.5, fpShade);
+      float cover = clamp(foamMask + 0.5 * activeCap * unresolved, 0.0, 0.74);
       float edge = 1.0 - cover;
-      foam = smoothstep(edge - 0.06, edge + 0.06, lace + 0.12 * (fx2.g - 0.5));
-      foamThin = smoothstep(edge - 0.18, edge + 0.04, lace) * (1.0 - foam) * 0.7;
+      float soft = mix(0.06, 0.32, unresolved);
+      foam = smoothstep(edge - soft, edge + soft, lace + 0.12 * (fx2.g - 0.5));
+      foamThin = smoothstep(edge - 0.18 - soft, edge + 0.04, lace) * (1.0 - foam) * 0.7;
     }
     if (wakeDensity > 0.015) {
       // Boat foam, lace not paint: the density decides what fraction of a bubble-raft pattern turns
@@ -503,7 +518,13 @@ void main() {
   // water's own colour plus the grazing (rough, so well below total) reflection of the low sky. These
   // darker facets are most of the contrast of the far sea.
   vec3 Rsky = normalize(vec3(R.x, max(R.y, 0.0) + 0.02, R.z));
-  vec3 env = skyReflection(Rsky, alpha);
+  // How much sky one pixel of sea reflects. A mirror direction turns by twice the tilt of its facet, and the facets
+  // that count are all the slopes of a wind-ruffled sea (Cox–Munk: about ±11° in 12 knots), not only those this
+  // pixel cannot resolve: the cascades and ripple maps carry part of that variance at best. So the sky is never
+  // mirrored as a shape — a bright cloud lightens a stretch of water — except in a calm, where the slopes vanish and
+  // the reflection sharpens. (The sun's glitter below keeps the narrow lobe of the unresolved slopes.)
+  float skySpread = 2.0 * max(alpha, 0.6 * sqrt(coxMunk(localWind)));
+  vec3 env = skyReflection(Rsky, skySpread);
   float below = smoothstep(0.0, -0.06, R.y);
   env = mix(env, bodyLight + uWaterAbsorb * skyAmb * 0.8 + 0.35 * env, below);
   if (uReflectionOn > 0.5) {
@@ -555,14 +576,19 @@ void main() {
   color = mix(color, vHaze, clamp(fog, 0.0, 1.0) * uHazeMax);
 
   // ------------------------------------------------------------------ x-ray
-  // Near the boat the water turns see-through, showing keel, rudder and the deep-water backdrop.
+  // Round the boat the water turns see-through, showing the hull's bottom, keel and rudder against a clear backdrop:
+  // a window wide enough for the leeway picture ahead of and astern of the keel. It is a teaching view, so it stays
+  // see-through at grazing angles (the chase camera) and under the wake's foam, and it has a faint bright edge — a
+  // window cut in the water, not a calm patch.
   // A convex blend (not premultiplied) so it also behaves when a renderer tone-maps per draw.
   float xr = 0.0;
   if (uHullState.z > 0.001) {
-    vec2 e = boatLocal / vec2(8.5, 4.2);
-    xr = uHullState.z * (1.0 - smoothstep(0.55, 1.0, length(e)));
+    float d = length(boatLocal / vec2(11.0, 6.0));
+    xr = uHullState.z * (1.0 - smoothstep(0.62, 1.0, d));
+    float edge = smoothstep(0.9, 0.96, d) * (1.0 - smoothstep(0.96, 1.02, d));
+    color += uHullState.z * edge * 0.2 * (vSkyAmb + beam) * vec3(0.45, 1.3, 1.5);
   }
-  float T = xr * 0.8 * (1.0 - foam) * (1.0 - 0.6 * F);
+  float T = xr * 0.94 * (1.0 - 0.7 * foam) * (1.0 - 0.3 * F);
   gl_FragColor = vec4(color, 1.0 - T);
   if (uDebugMode > 0.5) {
     int m = int(uDebugMode + 0.5);

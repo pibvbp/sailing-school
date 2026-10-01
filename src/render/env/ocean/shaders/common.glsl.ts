@@ -54,10 +54,16 @@ float oSmithGgxCorrelated(float NoV, float NoL, float a) {
   float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
   return 0.5 / max(gv + gl, 1e-6);
 }
-/** Schlick with F0 = 0.02 (water); a rough surface loses the sharp grazing peak. */
+/**
+ * Schlick with F0 = 0.02 (water). A rough surface loses the sharp grazing peak and reflects a little more at middle
+ * angles, where its facets are seen at a spread of incidences. Looking straight down that spread changes nothing
+ * (the curve is flat there), so the roughness term fades out toward the vertical: seen from above the sea reflects
+ * 2 % of the sky and shows its own colour.
+ */
 float oFresnelWater(float NoV, float roughness) {
   float f = 0.02 + 0.98 * pow(clamp(1.0 - NoV, 0.0, 1.0), 5.0);
-  return mix(f, clamp(f * 0.72 + 0.06, 0.0, 1.0), clamp(roughness * 1.5, 0.0, 1.0));
+  float rough = clamp(f * 0.72 + 0.06, 0.0, 1.0);
+  return mix(f, rough, clamp(roughness * 1.5, 0.0, 1.0) * (1.0 - smoothstep(0.5, 0.95, NoV)));
 }
 float oLuminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 `;

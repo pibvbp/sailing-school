@@ -63,7 +63,9 @@ The tile sizes don't divide into one another, so the tiles never line up. Some d
 ray from the camera, intersected with the curved sea. So the triangles are evenly spread in screen space and the mesh
 ends exactly on the horizon. The shading combines:
 
-- sky reflection with a Fresnel term, from a baked map of the sky;
+- sky reflection with a Fresnel term, from a baked map of the sky. The lookup is averaged over the angle a
+  wind-ruffled surface scatters it (about ±13° in 12 knots, from the Cox–Munk slopes), so a bright cloud lightens a
+  stretch of water but is never mirrored as a shape. In a calm the slopes vanish and the reflection sharpens;
 - the sun's glitter, as a GGX highlight;
 - Cox–Munk roughness for the ripples too small for the mesh;
 - light scattering through the wave crests;
@@ -74,7 +76,10 @@ ends exactly on the horizon. The shading combines:
 **Wind on the water.**
 
 - **Whitecaps** are keyed to the wind: none below about 10.5 knots, the first scattered caps at 12–14 knots, plenty by
-  20 knots. Foam comes from the steepest crests of each tile and lingers as it decays.
+  20 knots. Foam comes from the steepest crests of each tile and lingers as it decays. Only the tumbling front of a
+  breaker, a band along the top of the crest, is dense white; what it leaves behind is lace. Where a pixel is too
+  far away to resolve the lace, foam is drawn by the fraction of the pixel it covers, so a distant patch fades at
+  its edges and does not turn into a hard-edged white shape.
 - **Gusts and lulls.** The simulation's gust patches make the water darker and matte, like a cat's paw; lulls turn it
   glassy and silvery. So you can see a gust coming.
 
@@ -103,12 +108,28 @@ GPU. The boat and the marks ride the waves that are drawn; the boat ignores the 
 
 ## Sky, sun and light
 
-- **Sky** ([`sky.ts`](../src/render/env/sky.ts), [`clouds.ts`](../src/render/env/clouds.ts)). The sky is three's
-  `Sky.js`, a Preetham daylight model with a cloud layer, patched in a few ways:
-  - the clouds drift with the wind aloft, which is veered and stronger than the surface wind;
-  - they are lit by sunlight that has crossed the atmosphere;
-  - they have bright sun-facing edges and grey bases;
-  - the sunlight dims when a cloud crosses the sun.
+- **Sky** ([`sky.ts`](../src/render/env/sky.ts)). The clear sky is three's `Sky.js`, a Preetham daylight model.
+- **Clouds** ([`volumetricClouds.ts`](../src/render/env/volumetricClouds.ts),
+  [`cloudField.ts`](../src/render/env/cloudField.ts), [`cloudShaders.ts`](../src/render/env/cloudShaders.ts),
+  [`cloudNoise.ts`](../src/render/env/cloudNoise.ts)). Fair-weather cumulus, ray-marched through a real volume:
+  - **Shape.** A 48 km tileable weather map places the clouds and sets how tall each one grows. Every cloud has a
+    flat base at 950 m and a top that reaches up to 2,450 m. Two noise volumes carve billows into it, from 300 m
+    down to 25 m. Toward overcast the field closes into a lower, flatter deck.
+  - **Light.** Sunlight is followed through the cloud toward the sun, so tops are bright, bases are grey and thin
+    edges glow when the sun is behind them. The sky lights the clouds from all round, and haze fades them toward
+    the horizon.
+  - **Cost.** The camera sits at sea level and the clouds are kilometres away, so they are not marched for every
+    pixel of every frame. They are marched into a panorama of the upper half of the sky, one tile per frame (a full
+    pass takes about a second at 60 fps), and the sky dome looks them up there. Between passes the picture slides
+    with the wind aloft and cross-fades to the next pass, so the clouds drift every frame.
+  - **Time of day.** The panorama stores how much sun and sky light each direction scatters, not colours. Changing
+    the time of day therefore recolours the clouds in the same frame.
+  - **Reflections.** The environment map that the boat's gloss and the sea reflect is drawn from the same panorama.
+    It is filtered again every 8 s as the clouds drift, a strip per frame
+    ([`envBake.ts`](../src/render/env/envBake.ts)), so no frame carries the whole bake.
+  - **The sun dims** when a cloud crosses it: the CPU follows the same density field toward the sun every frame.
+  - **Fallback.** On the Low tier, and on GPUs without float render targets, a 2-D cloud layer painted into the sky
+    shader draws instead ([`clouds.ts`](../src/render/env/clouds.ts)).
 - **Sun position** comes from the local solar time at a mid-latitude site (45°) in late summer: 17:00 puts the sun
   24° up (the default), 13:00 62°, and 18:30 9°. The time slider runs from 05:00 to 21:00.
 - **One set of numbers.** A CPU copy of the same Preetham terms gives the sun's colour, the horizon and fog colours,

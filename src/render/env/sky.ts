@@ -6,6 +6,9 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { CloudLayer, cloudUniforms, patchCloudShader } from './clouds';
+import { CLOUD_DOME_GLSL, CLOUD_DOME_PARS_GLSL } from './cloudShaders';
+import { EnvironmentBaker } from './envBake';
+import { cloudQualityFor, VolumetricClouds } from './volumetricClouds';
 import type { QualitySettings, SkyState } from '../core/types';
 
 // ---------------------------------------------------------------------------------------------------------
@@ -136,7 +139,27 @@ const SKY_PATCHES: Array<[string, string]> = [
     '* ( 1.0 - Fex ), vec3( 1.5 ) );',
     '* ( 1.0 - Fex ), vec3( scatterExponent ) );',
   ],
-  ['uniform float time;', 'uniform float time;\n\t\tuniform float scatterExponent;\n\t\tuniform float seaBelowHorizon;\n\t\tuniform vec3 seaWater;'],
+  [
+    'uniform float time;',
+    `uniform float time;
+		uniform float scatterExponent;
+		uniform float seaBelowHorizon;
+		uniform vec3 seaWater;
+		// Volumetric clouds come from a panorama (volumetricClouds.ts); without them the 2-D layer below draws.
+		#ifdef VOLUMETRIC_CLOUDS
+		const bool flatClouds = false;
+		${CLOUD_DOME_PARS_GLSL}
+		#else
+		const bool flatClouds = true;
+		#endif`,
+  ],
+  [
+    'if ( direction.y > 0.0 && cloudCoverage > 0.0 ) {',
+    `#ifdef VOLUMETRIC_CLOUDS
+			${CLOUD_DOME_GLSL}
+			#endif
+			if ( flatClouds && direction.y > 0.0 && cloudCoverage > 0.0 ) {`,
+  ],
   [
     'vec3 direction = normalize( vWorldPosition - cameraPosition );',
     `vec3 direction = normalize( vWorldPosition - cameraPosition );
@@ -159,7 +182,8 @@ const SKY_PATCHES: Array<[string, string]> = [
   ],
 ];
 
-function createSkyMaterial(): THREE.ShaderMaterial {
+/** `volumetric`: draw the cloud panorama instead of the 2-D layer (the caller adds the panorama uniforms). */
+function createSkyMaterial(volumetric: boolean): THREE.ShaderMaterial {
   const shader = Sky.SkyShader as SkyShaderDef;
   let fragmentShader = patchCloudShader(shader.fragmentShader);
   for (const [from, to] of SKY_PATCHES) {
@@ -168,6 +192,7 @@ function createSkyMaterial(): THREE.ShaderMaterial {
   }
   return new THREE.ShaderMaterial({
     name: 'SailingSky',
+    defines: volumetric ? { VOLUMETRIC_CLOUDS: '' } : {},
     uniforms: THREE.UniformsUtils.merge([
       shader.uniforms,
       cloudUniforms(),
@@ -207,12 +232,26 @@ const METER_GRID = [-0.75, -0.25, 0.25, 0.75] as const;
 const SUN_BEHIND_CLOUD_TIME_S = 0.6;
 /** Rebaking the IBL costs a few ms: at most this often while the time of day is being animated. */
 const MIN_BAKE_INTERVAL_S = 0.5;
+/** With volumetric clouds the reflections must follow the drifting clouds: rebake this often. */
+const CLOUD_BAKE_INTERVAL_S = 8;
+/** Sunlit cloud radiance per unit of the sun's irradiance / π (a white diffuser facing the sun = 1). */
+const CLOUD_SUN_GAIN = 0.85;
+/** Ambient cloud radiance per unit of the sky's irradiance / π. */
+const CLOUD_AMBIENT_GAIN = 1.8;
+/** How much of the sky's blue the clouds' ambient light keeps (light inside a cloud is mostly white). */
+const CLOUD_AMBIENT_SATURATION = 0.8;
+/** Haze takes distant clouds a little faster in the blue than in the red. */
+const CLOUD_FADE_POWER = [0.85, 1, 1.2] as const;
+/** Eye position assumed until the first `update` (the panorama barely depends on it). */
+const DEFAULT_EYE = new THREE.Vector3(0, 2, 0);
 
 const luminance = (r: number, g: number, b: number): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
 export interface SkyOptions {
   hours?: number;
   cloudCover?: number;
+  /** False keeps the 2-D cloud layer on every tier (default: volumetric clouds wherever they are supported). */
+  volumetricClouds?: boolean;
 }
 
 /**
@@ -232,6 +271,11 @@ export class SkySystem implements SkyState {
   hours = 17;
   /** Cloud layer: cover, drift and shape parameters (edit `clouds.params`, then call `refresh()`). */
   readonly clouds: CloudLayer;
+  /**
+   * Volumetric clouds (the panorama the dome samples), or null where the 2-D layer above draws instead: on the
+   * low tier and on GPUs without float render targets.
+   */
+  volumetric: VolumetricClouds | null = null;
   /**
    * Blend of reflected-light metering over the camera view into the exposure (0 = incident reading only).
    * Looking into a low sun stops down like a camera would; looking away opens up slightly.
@@ -256,12 +300,21 @@ export class SkySystem implements SkyState {
   private readonly cubeTarget: THREE.WebGLCubeRenderTarget | null = null;
   private readonly cubeCamera: THREE.CubeCamera | null = null;
   private readonly pmrem: THREE.PMREMGenerator | null = null;
+  /** Spreads re-bakes over frames (see envBake.ts). */
+  private readonly envBaker: EnvironmentBaker | null = null;
   private pmremTarget: THREE.WebGLRenderTarget | null = null;
   private envDirty = true;
   private sinceBake = Infinity;
 
   private clearSunIntensity = 0;
   private cloudSun = 1;
+  /** Cosine-weighted mean radiance of the clear sky (its irradiance / π): the clouds' ambient light. */
+  private readonly skyAmbient = new THREE.Color();
+  private readonly eye = new THREE.Vector3().copy(DEFAULT_EYE);
+  /** False where the GPU cannot render float targets, or the caller asked for the 2-D layer. */
+  private readonly allowVolumetric: boolean;
+  /** The volumetric clouds while a tier without them is active (kept so that switching back is cheap). */
+  private parked: VolumetricClouds | null = null;
   private seaWaterLuminance = 0;
   private metered = false;
   private readonly ray = new THREE.Vector3();
@@ -273,8 +326,11 @@ export class SkySystem implements SkyState {
     this.scene = scene;
     this.cloudCover = THREE.MathUtils.clamp(options.cloudCover ?? 0.35, 0, 1);
     this.clouds = new CloudLayer(this.cloudCover);
+    this.allowVolumetric = options.volumetricClouds !== false && VolumetricClouds.isSupported(renderer);
+    const cloudQuality = this.allowVolumetric ? cloudQualityFor(q.tier) : null;
+    if (cloudQuality) this.volumetric = new VolumetricClouds(renderer, cloudQuality, this.cloudCover);
 
-    this.material = createSkyMaterial();
+    this.material = createSkyMaterial(this.volumetric !== null);
     this.dome = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.material);
     this.dome.name = 'sky';
     this.dome.scale.setScalar(1000);
@@ -285,6 +341,8 @@ export class SkySystem implements SkyState {
 
     this.envMaterial = this.material.clone();
     this.envMaterial.uniforms['showSunDisc']!.value = 0; // the sun is a light, not a texel of the IBL
+    // Both materials read the same panorama uniforms (shared objects: cloning would drop the textures).
+    if (this.volumetric) for (const m of [this.material, this.envMaterial]) Object.assign(m.uniforms, this.volumetric.domeUniforms);
     const envDome = new THREE.Mesh(this.dome.geometry, this.envMaterial);
     envDome.scale.setScalar(10);
     envDome.frustumCulled = false;
@@ -297,12 +355,23 @@ export class SkySystem implements SkyState {
       this.cubeCamera = new THREE.CubeCamera(0.1, 100, this.cubeTarget);
       this.pmrem = new THREE.PMREMGenerator(renderer);
       this.pmrem.compileCubemapShader();
+      this.envBaker = new EnvironmentBaker(renderer, this.pmrem);
     }
 
     this.fog = new THREE.FogExp2(0xffffff, FOG_DENSITY);
     scene.fog = this.fog;
 
     this.setTimeOfDay(options.hours ?? this.hours);
+    if (this.volumetric) {
+      // Open the session in sunlight: the field starts shifted so that the sun sits in a gap between clouds.
+      const e = this.eye;
+      const s = this.sunDirection;
+      this.volumetric.field.openSkyToward(e.x, e.y, e.z, s.x, s.y, s.z);
+      this.cloudSun = this.volumetric.sunTransmittance(e, s);
+      this.sunIntensity = this.clearSunIntensity * this.cloudSun;
+      // The first panorama is marched in one go so that the first frame and the first bake already show clouds.
+      this.volumetric.renderAll(e, s);
+    }
     this.bakeEnvironment();
   }
 
@@ -316,7 +385,46 @@ export class SkySystem implements SkyState {
   setCloudCover(cover: number): void {
     this.cloudCover = THREE.MathUtils.clamp(cover, 0, 1);
     this.clouds.setCover(this.cloudCover);
+    this.volumetric?.setCover(this.cloudCover);
     this.refreshLighting();
+  }
+
+  /**
+   * Follow a quality-tier change: the cloud panorama's size and march steps, or the 2-D layer on tiers without
+   * volumetric clouds. Switching between the two recompiles the dome shader once and, toward volumetric, marches
+   * a first panorama at once (a few tens of ms, like the other reallocations of a tier change).
+   */
+  setQuality(q: QualitySettings): void {
+    const cloudQuality = this.allowVolumetric ? cloudQualityFor(q.tier) : null;
+    if (cloudQuality && this.volumetric) {
+      this.volumetric.setQuality(cloudQuality);
+    } else if (cloudQuality) {
+      this.volumetric = this.parked ?? new VolumetricClouds(this.renderer, cloudQuality, this.cloudCover);
+      this.parked = null;
+      this.volumetric.setCover(this.cloudCover);
+      this.volumetric.setQuality(cloudQuality);
+      this.useVolumetric(true);
+      this.refreshLighting();
+      this.volumetric.renderAll(this.eye, this.sunDirection);
+    } else if (this.volumetric) {
+      this.parked = this.volumetric;
+      this.volumetric = null;
+      this.useVolumetric(false);
+      this.refreshLighting();
+    }
+  }
+
+  /** Point both sky materials at the cloud panorama, or back at the 2-D layer. */
+  private useVolumetric(on: boolean): void {
+    for (const m of [this.material, this.envMaterial]) {
+      if (on && this.volumetric) {
+        m.defines['VOLUMETRIC_CLOUDS'] = '';
+        Object.assign(m.uniforms, this.volumetric.domeUniforms);
+      } else {
+        delete m.defines['VOLUMETRIC_CLOUDS'];
+      }
+      m.needsUpdate = true;
+    }
   }
 
   /** Re-derive lighting and rebake after editing `clouds.params` or `ATMOSPHERE` directly. */
@@ -331,9 +439,28 @@ export class SkySystem implements SkyState {
    */
   update(dt: number, camera: THREE.Camera, windFromRad: number, windSpeed: number): void {
     camera.getWorldPosition(this.dome.position);
+    this.eye.copy(this.dome.position);
     this.clouds.update(dt, windFromRad, windSpeed);
-    this.clouds.applyTo(this.material.uniforms);
-    const target = this.clouds.sunTransmittance(this.sunDirection);
+
+    // One unit of GPU work per frame: a strip of the environment bake while one is in flight, else cloud tiles.
+    // The bake restarts when the sun or the cover changed, and every few seconds as the clouds drift, because
+    // the sea and the boat reflect them.
+    this.sinceBake += dt;
+    if (this.volumetric && this.cloudCover > 0 && this.sinceBake >= CLOUD_BAKE_INTERVAL_S) this.envDirty = true;
+    const baker = this.envBaker;
+    if (baker && !baker.busy && this.envDirty && this.sinceBake >= MIN_BAKE_INTERVAL_S) this.beginEnvironmentBake();
+    const baking = baker?.busy === true;
+    if (baking) baker.step();
+
+    let target: number;
+    if (this.volumetric) {
+      this.volumetric.advance(dt, windFromRad, windSpeed);
+      this.volumetric.update(this.eye, this.sunDirection, baking ? 0 : undefined);
+      target = this.volumetric.sunTransmittance(this.eye, this.sunDirection);
+    } else {
+      this.clouds.applyTo(this.material.uniforms);
+      target = this.clouds.sunTransmittance(this.sunDirection);
+    }
     this.cloudSun += (target - this.cloudSun) * (1 - Math.exp(-dt / SUN_BEHIND_CLOUD_TIME_S));
     this.sunIntensity = this.clearSunIntensity * this.cloudSun;
 
@@ -342,8 +469,6 @@ export class SkySystem implements SkyState {
     this.metered = true;
     this.renderer.toneMappingExposure = this.exposure;
 
-    this.sinceBake += dt;
-    if (this.envDirty && this.sinceBake >= MIN_BAKE_INTERVAL_S) this.bakeEnvironment();
   }
 
   /** Remove the dome and free GPU resources. */
@@ -354,6 +479,8 @@ export class SkySystem implements SkyState {
     this.dome.geometry.dispose();
     this.material.dispose();
     this.envMaterial.dispose();
+    this.volumetric?.dispose();
+    this.parked?.dispose();
     this.cubeTarget?.dispose();
     this.pmremTarget?.dispose();
     this.pmrem?.dispose();
@@ -371,7 +498,7 @@ export class SkySystem implements SkyState {
     this.sunColor.setRGB(t[0]! / peak, t[1]! / peak, t[2]! / peak, THREE.LinearSRGBColorSpace);
     const colorLum = Math.max(1e-6, luminance(this.sunColor.r, this.sunColor.g, this.sunColor.b));
     this.clearSunIntensity = (SUN_ILLUMINANCE_SCALE * beam) / colorLum;
-    this.cloudSun = this.clouds.sunTransmittance(this.sunDirection);
+    this.cloudSun = this.volumetric ? this.volumetric.sunTransmittance(this.eye, this.sunDirection) : this.clouds.sunTransmittance(this.sunDirection);
     this.sunIntensity = this.clearSunIntensity * this.cloudSun;
 
     // Sky irradiance on a horizontal surface and the horizon ring; under cloud the haze turns grey.
@@ -409,6 +536,21 @@ export class SkySystem implements SkyState {
       (u['cloudSunTransmittance']!.value as THREE.Color).setRGB(t[0]!, t[1]!, t[2]!, THREE.LinearSRGBColorSpace);
     }
     this.clouds.applyTo(this.material.uniforms);
+    if (this.volumetric) {
+      // The panorama stores how much sun and sky light each texel scatters; these are the lights themselves, so
+      // a new time of day recolours the clouds at once.
+      const u = this.volumetric.domeUniforms;
+      (u['cloudSunLight']!.value as THREE.Color).copy(this.sunColor).multiplyScalar((this.clearSunIntensity / Math.PI) * CLOUD_SUN_GAIN);
+      const a = this.skyAmbient;
+      const lum = luminance(a.r, a.g, a.b);
+      (u['cloudAmbientLight']!.value as THREE.Color)
+        .setRGB(lum, lum, lum, THREE.LinearSRGBColorSpace)
+        .lerp(a, CLOUD_AMBIENT_SATURATION * (1 - this.cloudCover * this.cloudCover))
+        .multiplyScalar(CLOUD_AMBIENT_GAIN);
+      (u['cloudFadePower']!.value as THREE.Vector3).fromArray(CLOUD_FADE_POWER);
+      // Under cloud the haze that swallows distant clouds is grey, like the fog above.
+      u['cloudHazeGrey']!.value = this.cloudCover * this.cloudCover;
+    }
     this.envDirty = true;
   }
 
@@ -447,16 +589,31 @@ export class SkySystem implements SkyState {
     return THREE.MathUtils.clamp(blended, this.incidentExposure / 4, this.incidentExposure * 1.6);
   }
 
+  /** Draw the sky (clouds included, sun disc hidden) into the cube map the environment is filtered from. */
+  private readonly renderEnvCube = (): void => {
+    this.clouds.applyTo(this.envMaterial.uniforms);
+    this.cubeCamera?.update(this.renderer, this.envScene);
+  };
+
+  /** Bake the environment in one call (start-up; ≈ 10 ms). */
   private bakeEnvironment(): void {
     this.envDirty = false;
     this.sinceBake = 0;
-    if (!this.cubeCamera || !this.cubeTarget || !this.pmrem) return;
-    this.clouds.applyTo(this.envMaterial.uniforms);
-    this.cubeCamera.update(this.renderer, this.envScene);
-    this.pmremTarget = this.pmrem.fromCubemap(this.cubeTarget.texture, this.pmremTarget);
+    if (!this.cubeTarget || !this.envBaker) return;
+    this.pmremTarget = this.envBaker.bakeNow(this.renderEnvCube, this.cubeTarget.texture, this.pmremTarget);
     this.pmremTarget.texture.name = 'sky-environment';
     this.envMap = this.pmremTarget.texture;
     this.scene.environment = this.envMap;
+  }
+
+  /** Re-bake the environment a unit per frame into the same texture (falls back to the one call if it cannot). */
+  private beginEnvironmentBake(): void {
+    if (!this.cubeTarget || !this.envBaker || !this.pmremTarget || !this.envBaker.begin(this.renderEnvCube, this.cubeTarget.texture, this.pmremTarget)) {
+      this.bakeEnvironment();
+      return;
+    }
+    this.envDirty = false;
+    this.sinceBake = 0;
   }
 
   /** Cosine-weighted integral of the clear sky over the upper hemisphere (horizontal irradiance, luminance). */
@@ -466,6 +623,9 @@ export class SkySystem implements SkyState {
     const rings = 12;
     const sectors = 24;
     let sum = 0;
+    let r = 0;
+    let g = 0;
+    let b = 0;
     for (let i = 0; i < rings; i++) {
       const el0 = (i / rings) * (Math.PI / 2);
       const el1 = ((i + 1) / rings) * (Math.PI / 2);
@@ -474,8 +634,12 @@ export class SkySystem implements SkyState {
       for (let j = 0; j < sectors; j++) {
         this.model.radiance(directionFromBearing(((j + 0.5) / sectors) * 2 * Math.PI, el, dir), c);
         sum += luminance(c.r, c.g, c.b) * weight;
+        r += c.r * weight;
+        g += c.g * weight;
+        b += c.b * weight;
       }
     }
+    this.skyAmbient.setRGB(r / Math.PI, g / Math.PI, b / Math.PI, THREE.LinearSRGBColorSpace);
     return sum;
   }
 

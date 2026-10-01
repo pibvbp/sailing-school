@@ -4,6 +4,10 @@ Sailing School bundles or adapts the following open-source software. Each is use
 
 ## three.js (MIT)
 
+The 3-D engine, bundled. Two files also adapt its source: `src/render/env/sky.ts` patches the `Sky` shader from the
+examples, and `src/render/env/envBake.ts` repeats the roughness schedule and CubeUV layout arithmetic of
+`PMREMGenerator`, so that the environment map can be filtered a strip per frame.
+
 ```
 The MIT License
 
@@ -155,3 +159,12 @@ THE SOFTWARE.
   are used.
 - `src/sim/rng.ts`: the seeded random-number generator is the well-known public-domain mulberry32 algorithm by
   Tommy Ettinger.
+- `src/render/env/cloudNoise.ts`: the 32-bit integer hash that seeds the cloud noise is "lowbias32" by Chris Wellons
+  (hash-prospector), released into the public domain under the Unlicense.
+- `src/render/env/cloudShaders.ts`: the per-pixel jitter of the cloud march is interleaved gradient noise, a
+  one-line formula published by Jorge Jimenez ("Next Generation Post Processing in Call of Duty: Advanced Warfare",
+  SIGGRAPH 2014).
+- The volumetric clouds are an original implementation of published techniques, with no code taken from them:
+  the Perlin–Worley noise, the coverage remap and the powder term follow Andrew Schneider, "The Real-Time
+  Volumetric Cloudscapes of Horizon Zero Dawn" (SIGGRAPH 2015), and the lighting terms follow Sébastien Hillaire,
+  "Physically Based Sky, Atmosphere and Cloud Rendering in Frostbite" (SIGGRAPH 2016).
