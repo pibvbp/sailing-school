@@ -276,9 +276,9 @@ export class TrimPanel {
 
     // Pushing the boom out by hand backs the main (getting out of irons); the mainsheet must be eased for it.
     this.boomPush = new Segmented('Push boom', [
-      { value: 'off', label: 'Boom free', short: 'Free', title: 'Nobody holds the boom' },
-      { value: 'port', label: 'Push to port', short: 'Port', title: 'A crew member pushes the boom out to port (ease the mainsheet)' },
-      { value: 'stbd', label: 'Push to stbd', short: 'Stbd', title: 'A crew member pushes the boom out to starboard (ease the mainsheet)' },
+      { value: 'off', label: 'Off', title: 'Nobody holds the boom' },
+      { value: 'port', label: 'Port', title: 'A crew member pushes the boom out to port (ease the mainsheet) — B' },
+      { value: 'stbd', label: 'Stbd', title: 'A crew member pushes the boom out to starboard (ease the mainsheet) — B' },
     ], (v) => {
       if (this.hooks.isLive('boomPush')) c().boomPush = v === 'port' ? 1 : v === 'stbd' ? -1 : 0;
     }, 'sx-seg--fill');
@@ -288,7 +288,7 @@ export class TrimPanel {
       h('div', 'sx-ro-row', [boom.el, twist.el, mainAoa.el]),
       this.mainGroove.el,
       this.mainTT.el,
-      this.boomPush.el,
+      h('div', 'sx-push-row', [h('span', { class: 'sx-push-k', text: 'Push boom' }), this.boomPush.el]),
       h('details', 'sx-shape', [
         h('summary', { text: 'Sail shape' }),
         this.bind('vang', 'main', { label: 'Vang', term: 'vang', min: 0, max: 1, ends: ['loose', 'hard'], format: pct }),

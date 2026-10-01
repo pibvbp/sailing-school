@@ -503,6 +503,9 @@
 .sx-dock-view .sx-dock-body { overflow: visible; }
 .sx-view-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .sx-view-slice { margin-top: 10px; }
+.sx-push-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.sx-push-k { font-size: 12px; font-weight: 600; color: var(--sx-faint); white-space: nowrap; }
+.sx-push-row .sx-seg { flex: 0 1 auto; min-width: 0; }
 .sx-view-k { font-size: 9.5px; font-weight: 750; letter-spacing: 0.11em; text-transform: uppercase; color: var(--sx-faint); padding-left: 2px; }
 .sx-cams .sx-seg-btn { padding: 5px 8px; font-size: 12px; }
 .sx-ovl-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }

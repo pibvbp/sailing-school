@@ -106,13 +106,15 @@ export class CameraRig {
     this.dragging.x = e.clientX;
     this.dragging.y = e.clientY;
     const k = 0.005;
+    // Horizontal drags move the world with the pointer (as in a map or a 3-D viewer): drag right and the scene turns
+    // right — the orbit cameras swing the other way round the boat, the helm and sail views look the other way.
     if (this.mode === 'helm' || this.mode === 'sail') {
-      this.lookYaw -= dx * k;
+      this.lookYaw += dx * k;
       this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - dy * k, -1.2, 1.4);
     } else if (this.mode === 'top') {
-      this.yaw -= dx * k;
+      this.yaw += dx * k;
     } else {
-      this.yaw -= dx * k;
+      this.yaw += dx * k;
       this.pitch = THREE.MathUtils.clamp(this.pitch + dy * k, 0.02, 1.45);
     }
   };
