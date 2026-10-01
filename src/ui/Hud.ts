@@ -51,6 +51,20 @@ export interface HudState {
 
 type Sheet = 'lesson' | 'trim' | 'view';
 
+/** How much of the viewport the HUD covers, as insets from its edges (CSS px). */
+export interface HudInsets { top: number; right: number; bottom: number; left: number }
+/** A rectangle in viewport CSS px. */
+export interface HudRect { x: number; y: number; w: number; h: number }
+/**
+ * What the HUD leaves free of the viewport. `insets` is where labels may go, and `keepOut` the floating parts that
+ * stand inside it (wind dial, small windows). `frame` is where the camera should put its subject: the same area, but
+ * ending above the wind dial, which sits under the middle of the view.
+ */
+export interface HudSafeArea { insets: Readonly<HudInsets>; keepOut: readonly Readonly<HudRect>[]; frame: Readonly<HudInsets> }
+
+/** Width of a dock's tab, which stays on screen beside an open dock and alone when the dock is collapsed (px). */
+const DOCK_TAB = 34;
+
 const COMPACT_QUERY = '(max-width: 900px)';
 
 export class Hud {
@@ -93,11 +107,16 @@ export class Hud {
   private rightCollapsed = false;
   private modePanel: HTMLElement | null = null;
   private eventLessons: Partial<Record<SimEventType, string>> = {};
+  private eventFilter: ((type: SimEventType) => boolean) | null = null;
   private readonly seenEvents = new Set<string>();
   private readonly lastToastAt = new Map<SimEventType, number>();
   private lastSimT = -Infinity;
   private pipRect: DOMRect | null = null;
   private pipDirty = true;
+  private readonly safe: HudInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+  private readonly keepOutPool: HudRect[] = [];
+  private readonly safeState: { insets: HudInsets; keepOut: HudRect[]; frame: HudInsets };
+  private safeDirty = true;
   private overlayTelltale = false;
   private readonly cost = { ema: 0, max: 0, frames: 0 };
 
@@ -203,14 +222,16 @@ export class Hud {
       this.closeSheet();
       this.applyInert();
       this.pipDirty = true;
+      this.safeDirty = true;
       this.textGate.force();
     };
     this.compactMq?.addEventListener('change', onCompact);
     this.cleanup.push(() => this.compactMq?.removeEventListener('change', onCompact));
-    const onResize = () => { this.pipDirty = true; };
+    const onResize = () => { this.pipDirty = true; this.safeDirty = true; };
     addEventListener('resize', onResize);
     this.cleanup.push(() => removeEventListener('resize', onResize));
 
+    this.safeState = { insets: this.safe, keepOut: [], frame: { top: 0, right: 0, bottom: 0, left: 0 } };
     this.applyMode();
     this.syncAll();
     this.applyInert();
@@ -294,6 +315,14 @@ export class Hud {
     this.applyMode();
   }
 
+  /**
+   * Which sim events may raise a toast (default: all). A running lesson is its own teacher: the app turns the trim
+   * advice off while one runs, so a step that asks for a luffing sail is not answered with "trim in".
+   */
+  setEventFilter(f: ((type: SimEventType) => boolean) | null): void {
+    this.eventFilter = f;
+  }
+
   /** Override which lesson a sim event's toast links to. */
   setEventLessons(map: Partial<Record<SimEventType, string>>): void {
     this.eventLessons = { ...this.eventLessons, ...map };
@@ -308,6 +337,62 @@ export class Hud {
     }
     const r = this.pipRect;
     return { x: r.left + 2, y: r.top + 2, width: r.width - 4, height: r.height - 4 };
+  }
+
+  /**
+   * What the HUD leaves free of the viewport: the scene keeps its subject in the middle of it and its labels inside
+   * it. Measured from the layout (not from the panels' sliding animation) and cached until the layout changes.
+   */
+  safeArea(): HudSafeArea {
+    const area = this.safeState;
+    if (!this.safeDirty) return area;
+    this.safeDirty = false;
+    const s = this.safe, vw = innerWidth, vh = innerHeight;
+    const keep = area.keepOut;
+    keep.length = 0;
+    const add = (el: HTMLElement, pad = 6): void => {
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return;
+      const k = (this.keepOutPool[keep.length] ??= { x: 0, y: 0, w: 0, h: 0 });
+      k.x = r.left - pad; k.y = r.top - pad; k.w = r.width + 2 * pad; k.h = r.height + 2 * pad;
+      keep.push(k);
+    };
+    // A part that is not laid out (the HUD hidden for a clean picture) covers nothing.
+    const below = (el: HTMLElement, gap: number): number => {
+      const r = el.getBoundingClientRect();
+      return r.height > 0 ? r.bottom + gap : 0;
+    };
+    const above = (el: HTMLElement, gap: number): number => {
+      const r = el.getBoundingClientRect();
+      return r.height > 0 ? vh - r.top + gap : 0;
+    };
+    if (this.compact) {
+      // Phones: the instrument row and the touch controls sit above the nav bar; an open panel is a bottom sheet.
+      const gap = 8;
+      const open = this.sheet === 'lesson' ? this.left : this.sheet === 'trim' ? this.right : this.sheet === 'view' ? this.view : null;
+      s.top = below(this.topBar.el, gap);
+      s.bottom = open && open.offsetHeight > 0 ? open.offsetHeight + gap : above(this.instruments.el, gap);
+      s.left = s.right = 0;
+      for (const el of this.touch.el.children) add(el as HTMLElement);
+    } else {
+      const gap = 12;
+      const cells = this.instruments.el.querySelector<HTMLElement>('.sx-cells');
+      const dock = (el: HTMLElement, collapsed: boolean, edge: number): number =>
+        el.offsetWidth <= 0 ? 0 : collapsed ? DOCK_TAB : edge + DOCK_TAB;
+      s.top = below(this.topBar.el, gap);
+      s.bottom = above(cells ?? this.instruments.el, gap);
+      s.left = dock(this.left, this.leftCollapsed, this.left.offsetLeft + this.left.offsetWidth);
+      s.right = dock(this.right, this.rightCollapsed, vw - this.right.offsetLeft);
+      // With the trim dock away, the view block is all that is left in that corner.
+      if (this.rightCollapsed) add(this.view);
+    }
+    add(this.instruments.dialSlot);
+    if (this.overlayTelltale) add(this.pip);
+    if (this.polar.visible) add(this.polar.el);
+    const f = area.frame;
+    f.top = s.top; f.left = s.left; f.right = s.right;
+    f.bottom = this.compact ? s.bottom : Math.max(s.bottom, above(this.instruments.dialSlot, 12));
+    return area;
   }
 
   /** Mean / peak cost of update() in ms (for the perf overlay). */
@@ -410,6 +495,7 @@ export class Hud {
 
   private togglePolar(on = !this.polar.visible): void {
     this.polar.setVisible(on);
+    this.safeDirty = true;
     this.overlayBar.sync(this.state.camera, this.app.overlays(), on);
   }
 
@@ -461,6 +547,7 @@ export class Hud {
     setClass(this.root, 'sx-left-collapsed', on);
     this.left.querySelector('.sx-dock-tab')?.setAttribute('aria-expanded', String(!on));
     this.pipDirty = true;
+    this.safeDirty = true;
     this.applyInert();
   }
 
@@ -469,6 +556,7 @@ export class Hud {
     setClass(this.root, 'sx-right-collapsed', on);
     this.right.querySelector('.sx-dock-tab')?.setAttribute('aria-expanded', String(!on));
     this.pipDirty = true;
+    this.safeDirty = true;
     this.textGate.force();
     this.applyInert();
   }
@@ -526,11 +614,13 @@ export class Hud {
       setClass(this.navButtons.get(k)!, 'is-on', k === s);
     }
     this.textGate.force();
+    this.safeDirty = true;
     this.applyInert();
   }
 
   private closeSheet(): void {
     this.sheet = null;
+    this.safeDirty = true;
     for (const k of ['lesson', 'trim', 'view'] as const) {
       setClass(this.root, `sx-sheet-${k}`, false);
       this.navButtons.get(k)?.setAttribute('aria-expanded', 'false');
@@ -567,6 +657,7 @@ export class Hud {
     this.overlayTelltale = on;
     this.pip.hidden = !on;
     this.pipDirty = true;
+    this.safeDirty = true;
   }
 
   // ---- sim events → toasts --------------------------------------------------------------------------
@@ -584,6 +675,7 @@ export class Hud {
       this.seenEvents.add(key);
       const spec = EVENT_TOASTS[e.type];
       if (!spec) continue;
+      if (this.eventFilter && !this.eventFilter(e.type)) continue;
       // A trim-mistake toast is advice; with both sheets locked (the crew is sailing a read-only lesson step)
       // the learner could not act on it.
       if ((e.type === 'luffing' || e.type === 'backwinded') && this.filter && !this.filter('mainSheet') && !this.filter('jibSheet')) continue;

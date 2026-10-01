@@ -240,7 +240,10 @@
 .sx-right-collapsed .sx-dock-right .sx-dock-tab .sx-icon:last-child { transform: rotate(180deg); }
 .sx-dock-left:not(:hover) .sx-dock-tab { opacity: 0.8; }
 .sx-sheet-head { display: none; }
-.sx-mode-host { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px 18px; }
+/* A mode's own panel (the Sail lab) fills the left dock and scrolls inside itself, like the Trim panel. */
+.sx-mode-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.sx-lab-note { margin: 0; font-size: 11.5px; line-height: 1.4; color: var(--sx-dim); }
+.sx-lab-help { margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: var(--sx-dim); }
 
 /* ---- lesson panel -------------------------------------------------------------------------- */
 .sx-lp { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }

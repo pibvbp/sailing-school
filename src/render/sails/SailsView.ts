@@ -70,6 +70,7 @@ export class SailsView {
   private readonly v1 = new THREE.Vector3();
   private readonly v2 = new THREE.Vector3();
   private readonly footprints = new Float32Array(30 * 4);
+  private readonly spinFootBody = { tack: { x: 0, y: 0, z: 0 }, clew: { x: 0, y: 0, z: 0 } };
   private readonly jibPlanAt = (u: number, v: number, out: PlanPoint): PlanPoint => this.jib.planAt(u, v, out);
 
   constructor(q: QualitySettings) {
@@ -122,6 +123,19 @@ export class SailsView {
     this.jibRef = { surface: this.jib.surface, rows: this.jib.rows, visible: false };
     this.telltaleAnchors = this.telltales.anchors;
     this.root.add(this.mainMesh, this.jibMesh, this.spinMesh, this.rollMesh, this.telltales.mesh, this.windex.group, this.burgee.group, ...this.telltaleAnchors);
+  }
+
+  /**
+   * The spinnaker's two foot corners as the cloth draws them this frame (body frame: x forward, y starboard, z down),
+   * or null while the kite is down. Through a gybe they glide between the snapshot's corners; the boat makes the guy
+   * and the sheet fast here so the ropes stay on the sail.
+   */
+  get spinFoot(): { tack: { x: number; y: number; z: number }; clew: { x: number; y: number; z: number } } | null {
+    if (!this.spin.visible) return null;
+    const out = this.spinFootBody, a = this.spin.footTack, b = this.spin.footClew;
+    out.tack.x = -a.z; out.tack.y = a.x; out.tack.z = -a.y;
+    out.clew.x = -b.z; out.clew.y = b.x; out.clew.z = -b.y;
+    return out;
   }
 
   update(dt: number, _t: number, sails: SimSnapshot['sails'], wind: SailsWind): void {

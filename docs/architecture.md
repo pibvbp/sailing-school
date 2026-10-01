@@ -31,7 +31,7 @@ For the physics itself, see [physics.md](physics.md); for the graphics, [renderi
 | [`src/sim/`](../src/sim) | The physics, in plain TypeScript | `simulation.ts`, `wind.ts`, `apparent.ts`, `aero.ts`, `sails/`, `hydro.ts`, `autopilot.ts`, `autocrew.ts`, `events.ts`, `vpp.ts`, `polarTable.ts`, `types.ts`, `data/polars.json` |
 | [`src/flow/`](../src/flow) | A 2-D vortex-lattice solver for horizontal slices through the sails, in plain TypeScript | `vortexLattice.ts`, `grid.ts`, `slices.ts` |
 | [`src/render/core/`](../src/render/core) | Renderer set-up, post-processing, quality tiers and the governor | `renderer.ts`, `post.ts`, `quality.ts`, `types.ts` |
-| [`src/render/env/`](../src/render/env) | Sky, clouds, sunlight, distant land, race marks and the ocean | `sky.ts`, `clouds.ts`, `lighting.ts`, `land.ts`, `marks.ts`, `ocean/` |
+| [`src/render/env/`](../src/render/env) | Sky, clouds, sunlight, distant land, race marks and the ocean | `sky.ts`, `volumetricClouds.ts`, `lighting.ts`, `land.ts`, `marks.ts`, `ocean/` |
 | [`src/render/boat/`](../src/render/boat) | The procedural boat: hull, deck, cabin, cockpit, keel and rudder, rig, fittings, ropes and crew | `BoatModel.ts` and one file per part |
 | [`src/render/sails/`](../src/render/sails) | Sailcloth, its material and textures, telltales, the windex and the burgee | `SailsView.ts`, `sailMesh.ts`, `clothMaterial.ts` |
 | [`src/render/overlays/`](../src/render/overlays) | The teaching overlays | `Overlays.ts`, one file per overlay, `flowField.ts` (snapshot → flow field) |
@@ -90,12 +90,18 @@ flowchart TD
 3. **Snapshot.** One `SimSnapshot` per frame. Events raised during the frame's steps are drained into it.
 4. **Boat pose.** The pose is interpolated between the last two physics states, so motion is smooth at any refresh
    rate. Heave, pitch and a little roll from the drawn waves are added on top.
-5. **Boat and sails.** The boom, rudder and tiller, jib clew, sheets, spinnaker pole and crew follow the snapshot, and
-   the sailcloth, telltales, windex and burgee update.
-6. **Environment.** The ocean gets the boat (for the wake and hull waves) and the gust patches. The sky advances its
-   clouds and exposure, the shadow frustum follows the boat, and the marks ride the water.
-7. **Camera, overlays, sound, HUD.** The camera rig follows the boat. The overlays, soundscape, HUD and, in Sail lab,
-   the lab panel update. The HUD refreshes its digits about 15 times a second and moves needles and bars every frame.
+5. **Sails, then the boat.** The sailcloth, telltales, windex and burgee update first. Then the boom, rudder and
+   tiller, jib clew, sheets, spinnaker pole and crew follow the snapshot. The order matters for the spinnaker: its
+   guy and sheet are made fast to the foot corners where the cloth draws them, which glide between the snapshot's
+   corners through a gybe.
+6. **Environment.** The ocean gets the boat (for the wake and hull waves) and the gust patches. The sky does one unit
+   of cloud work (a tile of the cloud panorama, or a strip of the environment map), meters the exposure and dims
+   the sun under a cloud. The shadow frustum follows the boat, and the marks ride the water.
+7. **Camera, overlays, sound, HUD.** The HUD reports how much of the window its panels cover
+   (`Hud.safeArea()`, cached until the layout changes). The camera rig follows the boat and keeps her in the middle
+   of what is left; the overlays keep their labels inside it and clear of the wind dial. Then the soundscape, the
+   HUD and, in Sail lab, the lab panel update. The HUD refreshes its digits about 15 times a second and moves needles
+   and bars every frame.
 8. **Lessons.** The lesson runner checks the current task. Paused time doesn't count toward a task.
 9. **Render.** The post chain draws the frame; the telltale cam, when it is on, re-renders its small view 20 times a
    second.

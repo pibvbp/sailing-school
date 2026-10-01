@@ -66,6 +66,9 @@ export class SpinShape {
   private orient = 1;
   /** Curl as the cloth shows it (the sim's value with the luff's response time). */
   private curlF = 0;
+  /** The foot corners as drawn this frame (boat-local): where the guy and the sheet are made fast. */
+  readonly footTack = new THREE.Vector3();
+  readonly footClew = new THREE.Vector3();
   private readonly tack = new THREE.Vector3();
   private readonly clew = new THREE.Vector3();
   private readonly head = new THREE.Vector3();
@@ -197,6 +200,9 @@ export class SpinShape {
     this.excite(t, aws, collapse, curl, luff, side, fill);
     if (this.colouring) writeState(surface, luff, rows.stall);
     surface.commit(this.colouring);
+    const o = surface.out, c1 = (surface.nu - 1) * 3;
+    this.footTack.set(o[0]!, o[1]!, o[2]!);
+    this.footClew.set(o[c1]!, o[c1 + 1]!, o[c1 + 2]!);
   }
 
   /** Head position at full hoist (the sections are laid out for it even while hoisting). */

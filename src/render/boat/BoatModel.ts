@@ -32,8 +32,12 @@ export interface BoatPose {
   jibClew: Vec3;
   /** 0 fully out … 1 furled. */
   jibFurl: number;
-  /** Spinnaker: pole angle/tip height as in the snapshot; tack and clew in the body frame. */
-  spin: { visible: boolean; poleAngle: number; poleTipH: number; tack: Vec3; clew: Vec3 };
+  /**
+   * Spinnaker: pole angle/tip height as in the snapshot; `tack` is the pole's tip and `clew` the clew, in the body
+   * frame. `foot` (optional) gives the kite's two foot corners as the cloth draws them — through a gybe they lag the
+   * snapshot — and is where the guy and the sheet are made fast; without it they lead from `tack` and `clew`.
+   */
+  spin: { visible: boolean; poleAngle: number; poleTipH: number; tack: Vec3; clew: Vec3; foot?: { tack: Vec3; clew: Vec3 } };
   /** Crew lateral position −1 (port) … +1 (starboard). */
   crewY: number;
   /** Heel (rad, + starboard down); used for rope sag and the crew's posture. */
@@ -68,6 +72,10 @@ const DEG = Math.PI / 180;
 const UP = new THREE.Vector3(0, 1, 0);
 const ZAXIS = new THREE.Vector3(0, 0, 1);
 const smooth = (a: number, b: number, x: number) => THREE.MathUtils.smoothstep(x, a, b);
+/** The spinnaker lines change sides only once the foot corners are this far apart across the boat (m). */
+const SPIN_SIDE_BAND = 0.3;
+/** How firmly the pole holds a foot corner: 1 with its tip on the corner, 0 once it is a metre away. */
+const poleHold = (corner: THREE.Vector3, tip: THREE.Vector3): number => 1 - smooth(0.25, 1.1, corner.distanceTo(tip));
 
 // Scratch.
 const _a = new THREE.Vector3();
@@ -75,6 +83,8 @@ const _b = new THREE.Vector3();
 const _c = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _e = new THREE.Vector3();
+const _f = new THREE.Vector3();
+const _g = new THREE.Vector3();
 
 /** Body-frame point → boat-local, into `out` (same as shared/coords bodyToLocal, allocation-free). */
 function bodyInto(p: Vec3, out: THREE.Vector3): THREE.Vector3 {
@@ -123,6 +133,10 @@ export class BoatModel {
   private readonly drum2: [THREE.Vector3, THREE.Vector3];
   private readonly quarter: [THREE.Vector3, THREE.Vector3];
   private readonly guy: [THREE.Vector3, THREE.Vector3];
+  /** The pose's copy of the kite's foot corners (when given). */
+  private readonly spinFoot = { tack: { x: 0, y: 0, z: 0 }, clew: { x: 0, y: 0, z: 0 } };
+  /** Side of the boat (±1, + starboard) the tack corner's line leads to; it follows the corners, with a dead band. */
+  private spinSide = 0;
   private readonly bailLocal = RIG.sheetBail.clone().add(v3(0, -0.075, 0));
   private readonly coilPoint = loc(TR.x - 0.35, 0.12, COCKPIT.soleH + 0.01);
   private readonly camOut = new THREE.Vector3();
@@ -271,9 +285,11 @@ export class BoatModel {
     const q = this.pose;
     const ps = p.spin, qs = q.spin;
     const jibLead = p.jibLead ?? 0;
+    const pf = ps.foot, qf = qs.foot;
     const changed = q.boomAngle !== p.boomAngle || q.rudder !== p.rudder || q.jibFurl !== p.jibFurl || q.heel !== p.heel
       || q.crewY !== p.crewY || q.jibLead !== jibLead || q.travelerCarY !== p.travelerCarY
       || !same(q.jibClew, p.jibClew) || qs.visible !== ps.visible || !same(qs.tack, ps.tack) || !same(qs.clew, ps.clew)
+      || (pf === undefined) !== (qf === undefined) || (pf !== undefined && qf !== undefined && !(same(pf.tack, qf.tack) && same(pf.clew, qf.clew)))
       || q.sheets.main !== p.sheets.main || q.sheets.jib !== p.sheets.jib || q.sheets.spin !== p.sheets.spin;
     if (!changed) return;
     q.boomAngle = p.boomAngle; q.rudder = p.rudder; q.jibFurl = p.jibFurl; q.crewY = p.crewY; q.heel = p.heel;
@@ -282,6 +298,13 @@ export class BoatModel {
     qs.visible = ps.visible; qs.poleAngle = ps.poleAngle; qs.poleTipH = ps.poleTipH;
     Object.assign(qs.tack, ps.tack);
     Object.assign(qs.clew, ps.clew);
+    if (pf) {
+      Object.assign(this.spinFoot.tack, pf.tack);
+      Object.assign(this.spinFoot.clew, pf.clew);
+      qs.foot = this.spinFoot;
+    } else {
+      qs.foot = undefined;
+    }
     Object.assign(q.sheets, p.sheets);
     this.ropesDirty = true;
   }
@@ -470,11 +493,12 @@ export class BoatModel {
     this.pole.visible = sp.visible;
     if (!sp.visible) {
       this.ropes.hide(R_SPIN_SHEET); this.ropes.hide(R_SPIN_GUY); this.ropes.hide(R_LIFT); this.ropes.hide(R_FOREGUY);
+      this.spinSide = 0;
       return;
     }
-    const tack = bodyInto(sp.tack, _a), clew = bodyInto(sp.clew, _b);
-    // Pole from the mast ring to the tack.
-    const dir = _c.subVectors(tack, RIG.poleInboard);
+    const tip = bodyInto(sp.tack, _a);
+    // Pole from the mast ring to its tip.
+    const dir = _c.subVectors(tip, RIG.poleInboard);
     const len = Math.max(1e-3, dir.length());
     this.pole.quaternion.setFromUnitVectors(ZAXIS, _d.copy(dir).multiplyScalar(1 / len));
     this.pole.scale.set(1, 1, len / BOAT.spinnaker.poleLength);
@@ -483,19 +507,27 @@ export class BoatModel {
     this.ropes.setPath(R_LIFT, this.pts);
     this.pts[0].copy(_e).y -= 0.03; this.pts[1].copy(RIG.foreguyDeck);
     this.ropes.setPath(R_FOREGUY, this.pts);
-    // Windward = the pole's side; with the pole on the centreline, the side away from the clew.
-    const windward = Math.sign(tack.x) || -Math.sign(clew.x) || 1;
-    const wi = windward > 0 ? 1 : 0, li = 1 - wi;
-    this.spinLine(R_SPIN_SHEET, clew, this.quarter[li], this.drum2[li]);
-    this.spinLine(R_SPIN_GUY, tack, this.guy[wi], this.drum2[wi]);
+    // One line on each foot corner, and each keeps to its own side of the boat. The corner on the pole is the guy,
+    // held down to the block at the beam; the free corner's line is the sheet, led to the quarter. In a gybe the pole
+    // leaves one corner and swings to the other: meanwhile both lines run as sheets, and neither changes sides.
+    const tack = sp.foot ? bodyInto(sp.foot.tack, _f) : tip;
+    const clew = bodyInto(sp.foot ? sp.foot.clew : sp.clew, _b);
+    const across = tack.x - clew.x;
+    if (this.spinSide === 0) this.spinSide = Math.sign(across) || Math.sign(tip.x) || 1;
+    else if (Math.abs(across) > SPIN_SIDE_BAND && Math.sign(across) !== this.spinSide) this.spinSide = Math.sign(across);
+    this.spinLine(R_SPIN_GUY, tack, this.spinSide, poleHold(tack, tip));
+    this.spinLine(R_SPIN_SHEET, clew, -this.spinSide, poleHold(clew, tip));
   }
 
-  private spinLine(slot: number, from: THREE.Vector3, via: THREE.Vector3, to: THREE.Vector3): void {
+  /** A spinnaker line from its corner, by its side's blocks (`hold` 1 = down to the guy block, 0 = aft to the quarter). */
+  private spinLine(slot: number, from: THREE.Vector3, side: number, hold: number): void {
+    const i = side > 0 ? 1 : 0;
+    const via = _g.lerpVectors(this.quarter[i], this.guy[i], hold);
     const n = this.ropes.specs[slot].samples;
     const n1 = Math.round(n * 0.7);
     sagSpan(this.pts, 0, n1, from, via, from.distanceTo(via) * (0.006 + 0.02 * (1 - this.pose.sheets.spin)), this.g);
-    sagSpan(this.pts, n1, n - n1, via, to, 0.004, this.g, false);
-    for (let i = 0; i < n; i++) this.clampAbove(this.pts[i], 0.004);
+    sagSpan(this.pts, n1, n - n1, via, this.drum2[i], 0.004, this.g, false);
+    for (let k = 0; k < n; k++) this.clampAbove(this.pts[k], 0.004);
     this.ropes.setPath(slot, this.pts);
   }
 

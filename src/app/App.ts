@@ -23,9 +23,9 @@ import type { Controls, ScenarioInit, SimSnapshot, WindSettings } from '../sim/t
 import { Hud } from '../ui/Hud';
 import { InputController } from '../ui/input';
 import { LessonRunner } from '../lessons/engine';
-import { OVERLAY_KEYS, type AppApi, type AppMode, type CameraKey, type Lesson, type MarkSpec, type OverlayKey } from '../lessons/types';
+import { OVERLAY_KEYS, type AppApi, type AppMode, type CameraKey, type ControlKey, type ForcePart, type Lesson, type MarkSpec, type OverlayKey } from '../lessons/types';
 import { FixedStepLoop } from './loop';
-import { LabPanel, LAB_DEFAULTS, twaForAwa, type LabParams } from './labPanel';
+import { LabPanel, LAB_DEFAULTS, awaForTwa, limited, twaForAwa, type LabParams } from './labPanel';
 import { TelltaleCam } from './telltaleCam';
 import { Soundscape } from '../audio/Soundscape';
 import { cameraYawFromBasis } from '../audio/mapping';
@@ -43,6 +43,9 @@ declare global {
 }
 
 const POLAR = polars as PolarTable;
+
+/** The towed boat holds its heading: manoeuvres and the autopilot have nothing to steer in the Sail lab. */
+const LAB_LOCKED: ReadonlySet<ControlKey> = new Set<ControlKey>(['tack', 'gybe', 'helmMode', 'helmTarget']);
 
 /** Free-sail start: 12 kn south-westerly with some gusts, close reach on starboard, crew trimming. */
 export function freeSailScenario(): ScenarioInit {
@@ -90,7 +93,8 @@ export class App implements AppApi {
   private readonly land: Land;
   private readonly marks: Marks;
   private readonly ocean: Ocean;
-  private readonly boatRoot = new THREE.Group();
+  /** The boat in the scene (hull, rig and sails hang from it); public for the tests and the screenshot tools. */
+  readonly boatRoot = new THREE.Group();
   private readonly boat: BoatModel;
   private readonly sails: SailsView;
   private readonly post: PostChain;
@@ -124,6 +128,8 @@ export class App implements AppApi {
   private snapBoat = false;
   private lab: LabPanel | null = null;
   private labParams: LabParams = { ...LAB_DEFAULTS };
+  /** True while the lab itself sets the wind (so the wind does not get read back into the lab's sliders). */
+  private applyingLab = false;
   /** Boat pose before the last physics step; rendering interpolates from it by the loop's alpha. */
   private readonly prevPose = { e: 0, n: 0, psi: 0, phi: 0 };
   private readonly pose = { e: 0, n: 0, psi: 0, phi: 0 };
@@ -181,7 +187,10 @@ export class App implements AppApi {
     this.input = new InputController(this, window);
     this.hud.attachInput(this.input);
     this.runner = new LessonRunner(opts.lessons ?? [], this, this.hud.lessonPanel);
-    this.hud.setControlFilter((k) => this.runner.isLive(k));
+    this.hud.setControlFilter((k) => this.runner.isLive(k) && !(this.mode === 'lab' && LAB_LOCKED.has(k)));
+    // Trim advice ("Luffing: trim in") is for sailing on your own: in a lesson the step's own text and hints teach,
+    // and several steps ask for exactly the sail shape the advice would warn about.
+    this.hud.setEventFilter((type) => !((type === 'luffing' || type === 'backwinded') && this.runner.activeLessonId !== null));
     // Toasts about sim events link to the lesson that explains them.
     this.hud.setEventLessons({
       crashGybe: 'gybing', gybeComplete: 'gybing', tackComplete: 'tacking', inIrons: 'out-of-irons',
@@ -211,11 +220,13 @@ export class App implements AppApi {
   get controls(): Controls { return this.sim.controls; }
 
   setMode(m: AppMode): void {
+    const from = this.mode;
     this.mode = m;
     // Leaving the lessons ends the running lesson: its locked controls, its marks and its per-frame logic
     // (which may reset the scenario) must not carry over into Free sail or the Sail lab.
     if (m !== 'lessons') this.runner.exit();
-    if (m === 'free') this.scenario(freeSailScenario());
+    // The lesson catalogue sits over a boat that is sailing, not over the lab's towed one.
+    if (m === 'free' || (m === 'lessons' && from === 'lab')) this.scenario(freeSailScenario());
     if (m === 'lab') {
       this.scenario(labScenario());
       this.applyLab(this.labParams);
@@ -238,6 +249,10 @@ export class App implements AppApi {
     this.hud.syncState({ camera: c });
   }
 
+  cameraMode(): CameraKey { return this.rig.mode; }
+
+  setCameraDistance(metres: number): void { this.rig.setDistance(metres); }
+
   setOverlay(k: OverlayKey, on: boolean): void {
     this.overlayState[k] = on;
     this.ov.set(k, on);
@@ -251,6 +266,8 @@ export class App implements AppApi {
     this.sim.setWind(p);
     this.applyOceanParams();
     this.hud.syncState({ wind: { ...this.sim.wind.settings } });
+    // The wind popover works in the Sail lab too: the lab's own sliders follow it instead of contradicting it.
+    if (this.mode === 'lab' && !this.applyingLab) this.labFromWind();
   }
 
   setTimeOfDay(h: number): void {
@@ -309,6 +326,8 @@ export class App implements AppApi {
 
   setSliceHeight(h: number): void { this.ov.setSliceHeight(h); }
 
+  setForceParts(parts: readonly ForcePart[] | null): void { this.ov.setForceParts(parts); }
+
   /** Id of the lesson in progress, or null (used by the e2e tests). */
   activeLesson(): string | null { return this.runner.activeLessonId; }
 
@@ -329,17 +348,24 @@ export class App implements AppApi {
 
   /** Sail lab: turn the wind so the towed boat sees the wanted apparent wind angle. */
   private applyLab(p: LabParams): void {
-    // A tow faster than the wind cannot produce every apparent wind angle: keep it just under the wind speed.
-    const tow = Math.min(p.tow, 0.95 * p.tws);
-    if (tow !== p.tow) {
-      p = { ...p, tow };
-      this.lab?.sync(p);
-    }
+    p = limited(p);
     this.labParams = p;
     const twa = twaForAwa(p.awa, p.tow, p.tws);
     const twd = wrapPi(this.sim.boat.psi + twa);
     this.sim.setTowed({ speed: p.tow });
+    this.applyingLab = true;
     this.setWind({ tws: p.tws, twd: twd < 0 ? twd + 2 * Math.PI : twd });
+    this.applyingLab = false;
+  }
+
+  /** Sail lab: the wind was set from outside the lab panel; read the lab's parameters back from it. */
+  private labFromWind(): void {
+    const w = this.sim.wind.settings;
+    const { tow } = limited({ ...this.labParams, tws: w.tws });
+    const awa = awaForTwa(wrapPi(w.twd - this.sim.boat.psi), tow, w.tws);
+    this.labParams = { awa, tws: w.tws, tow };
+    this.sim.setTowed({ speed: tow });
+    this.lab?.sync(this.labParams);
   }
 
   /** Free sail: a windward–leeward course laid from where the boat starts, square to the wind. */
@@ -380,6 +406,7 @@ export class App implements AppApi {
     this.quality = q;
     this.renderer.setPixelRatio(pixelRatioFor(q));
     this.post.setQuality(q);
+    this.sky.setQuality(q);
     this.lighting.setQuality(q);
     this.ocean.setQuality(q);
     this.ov.setQuality(q);
@@ -435,6 +462,8 @@ export class App implements AppApi {
 
     this.updateBoatPose(dt * scale, alpha, snap.t); // paused: the hull stops riding the (frozen) waves too
     const sails = snap.sails;
+    // The cloth first: the boat makes the spinnaker's guy and sheet fast to the corners as the cloth draws them.
+    this.sails.update(dt * scale, snap.t, sails, { awa: snap.wind.awa, aws: snap.wind.aws, awaDeck: snap.wind.awaDeck, awsDeck: snap.wind.awsDeck });
     this.boat.setPose({
       boomAngle: sails.main.boomAngle,
       rudder: snap.boat.rudder,
@@ -447,6 +476,7 @@ export class App implements AppApi {
         // The boat draws the pole to this point: the pole itself, which swings across the bow in a gybe.
         tack: sails.spinnaker.poleTip,
         clew: sails.spinnaker.clew,
+        foot: this.sails.spinFoot ?? undefined,
       },
       crewY: snap.boat.crewHike,
       heel: snap.boat.heel,
@@ -459,7 +489,6 @@ export class App implements AppApi {
       this.snapBoat = false;
     }
     this.boat.update(dt * scale);
-    this.sails.update(dt * scale, snap.t, sails, { awa: snap.wind.awa, aws: snap.wind.aws, awaDeck: snap.wind.awaDeck, awsDeck: snap.wind.awsDeck });
 
     this.ocean.setBoat({ e: snap.boat.pos.x, n: snap.boat.pos.y, heading: snap.boat.heading, speed: snap.boat.speed, heel: snap.boat.heel });
     this.ocean.setPuffs(snap.wind.puffs.map((p) => ({
@@ -475,6 +504,10 @@ export class App implements AppApi {
     this.boatRoot.updateMatrixWorld();
     this.frameMatrix.copy(this.boatRoot.matrixWorld);
     this.boatPos.copy(this.boatRoot.position);
+    // The boat sits in the middle of what the panels leave uncovered, not behind them; so do the overlays' labels.
+    const area = this.hud.safeArea();
+    this.rig.setSafeArea(area.frame, innerWidth, innerHeight);
+    this.ov.setSafeArea(area.insets, area.keepOut);
     this.rig.update(dt, {
       boatMatrix: this.frameMatrix,
       boatPos: this.boatPos,
@@ -483,6 +516,7 @@ export class App implements AppApi {
       twd: snap.wind.twd,
       // The rig's side (with the sim's hysteresis), not the raw wind angle: no hopping across the cockpit on a dead run.
       windSide: this.sim.side,
+      boomAngle: sails.main.boomAngle,
       waterHeight: (x, z) => this.ocean.sampler.heightAt(x, -z, snap.t),
     });
 

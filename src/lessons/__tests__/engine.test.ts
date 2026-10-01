@@ -4,7 +4,7 @@ import { EVENT_HINTS, LessonRunner, PROGRESS_KEY, ProgressStore, expandControls 
 import { GLOSSARY, glossaryRefs, lookupTerm, stripGlossary } from '../glossary';
 import {
   OVERLAY_KEYS,
-  type AppApi, type Lesson, type LessonActions, type LessonView, type LessonViewModel,
+  type AppApi, type CameraKey, type Lesson, type LessonActions, type LessonView, type LessonViewModel,
   type OverlayKey, type StorageLike, type TaskStatus,
 } from '../types';
 
@@ -55,7 +55,7 @@ class FakePanel implements LessonView {
   get hint(): string | null { return this.hints.length ? this.hints[this.hints.length - 1]! : null; }
 }
 
-type MockApp = AppApi & { calls: string[]; runner: LessonRunner | null; overlayState: Record<OverlayKey, boolean> };
+type MockApp = AppApi & { calls: string[]; runner: LessonRunner | null; overlayState: Record<OverlayKey, boolean>; cam: CameraKey };
 function mockApp(): MockApp {
   const calls: string[] = [];
   const overlayState = Object.fromEntries(OVERLAY_KEYS.map((k) => [k, false])) as Record<OverlayKey, boolean>;
@@ -65,7 +65,9 @@ function mockApp(): MockApp {
     runner: null,
     overlayState,
     setMode: (m) => { calls.push(`mode:${m}`); },
-    setCamera: (c) => { calls.push(`camera:${c}`); },
+    cam: 'free',
+    setCamera: (c) => { app.cam = c; calls.push(`camera:${c}`); },
+    cameraMode: () => app.cam,
     setOverlay: (k, on) => { overlayState[k] = on; calls.push(`overlay:${k}=${on}`); },
     overlays: () => ({ ...overlayState }),
     setWind: () => { calls.push('wind'); },
@@ -535,6 +537,26 @@ describe('LessonRunner: navigation, skipping, quiz', () => {
     runner.exit();
     h.frame(3);
     expect(runner.activeLessonId).toBeNull();
+  });
+
+  it('exit gives back the overlays and the camera the learner had before the lesson', () => {
+    const { app, runner, h } = setup([speedLesson(), speedLesson({ id: 'second' })]);
+    h.frame();
+    app.setOverlay('wheel', true);      // the learner's own choices, before any lesson
+    app.setCamera('free');
+    runner.start('speed');
+    runner.next();                      // step 1 turns forces on and the wheel off, and takes the chase camera
+    expect(app.overlayState).toMatchObject({ forces: true, wheel: false });
+    expect(app.cam).toBe('chase');
+    runner.start('second');             // a second lesson in the same visit keeps the first snapshot
+    app.setOverlay('labels', true);     // toggled during the lesson
+    runner.exit();
+    expect(app.overlayState).toMatchObject({ forces: false, wheel: true, labels: false });
+    expect(app.cam).toBe('free');
+    // Only the overlays that differ are touched, and a later exit with no lesson changes nothing.
+    const before = app.calls.length;
+    runner.exit();
+    expect(app.calls.length).toBe(before);
   });
 
   it('exit returns to the catalogue and offers to resume the unfinished lesson', () => {

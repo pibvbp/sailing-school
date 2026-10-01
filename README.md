@@ -33,6 +33,7 @@ decides which controls are live. The app then checks what you do in the live sim
 - **Show me** lets the crew demonstrate. It hands the controls back as soon as you touch them.
 - Each lesson ends with a short quiz.
 - Your ticks are saved in your browser.
+- A lesson borrows the view: when you leave it, the overlays and the camera go back to the way you had them.
 
 ![A lesson in progress: the lesson panel, a live task and the overlays it switched on](docs/images/lesson.jpg)
 
@@ -87,14 +88,16 @@ decides which controls are live. The app then checks what you do in the live sim
 
 - **Lessons.** The guided course above. Choose any lesson from the list; you don't have to take them in order.
 - **Free sail.** Start in 12 knots of gusty, shifting wind with a windward–leeward course laid out: a start line, a
-  windward mark 900 m upwind and a leeward gate. From the top bar or the menu you can set:
+  windward mark 900 m upwind and a leeward gate. The crew trims the sails and an autopilot holds a close reach until
+  you take the tiller. From the top bar or the menu you can set:
   - the wind speed (4–25 knots) and direction;
   - how gusty it is;
   - the size of the wind shifts (up to ±15°) and how often they come;
   - the time of day (05:00 to 21:00).
 - **Sail lab.** A wind tunnel on the water. The boat is towed at a steady speed on a fixed heading. You set the
   apparent wind angle, the wind speed and the tow speed, trim the sails, and read each sail's lift and drag
-  coefficients, lift-to-drag ratio, drive and heeling force as they respond.
+  coefficients, lift-to-drag ratio, drive and heeling force as they respond. The tow is held just under the wind
+  speed, so that every wind angle can be reached.
 
 ![Sail lab: the boat towed on a steady heading, with each sail's coefficients in the lab panel](docs/images/lab.jpg)
 
@@ -158,6 +161,8 @@ its **Auto** switch in the Trim panel turns it back on.
 
 - Drag the scene to look around, and scroll or pinch to zoom. The chase and free cameras orbit the boat, the helm and
   sail views look about, and the top view turns.
+- The cameras keep the boat in the part of the window that the panels leave free, and start far enough back to show
+  her from masthead to waterline, on a phone as well. Zoom in and the distance is yours.
 - Everything in the **Trim** panel works with the mouse:
   - the helm: manual, or an autopilot holding a heading, a true wind angle or an apparent wind angle;
   - the sheets and the traveler, and the sail shape (vang, outhaul, cunningham, backstay);
@@ -177,8 +182,11 @@ trim with the sheet sliders on the right.
 - **Half-float render targets.** The ocean renders into half-float (or float) textures, so the GPU must support
   `EXT_color_buffer_half_float` or `EXT_color_buffer_float`.
 - **Adaptive graphics quality.** Quality starts on **Auto**: it begins at High, drops a tier when frames take longer
-  than 20 ms, and climbs back after 10 seconds under 12 ms. You can also fix it at Ultra, High, Medium or Low from the
-  top bar.
+  than 20 ms, and climbs back after 10 seconds under 12 ms. A display that is capped at a lower frame rate (a battery
+  saver, a 30 Hz monitor) is told apart from a slow GPU and keeps its quality. You can also fix the quality at Ultra,
+  High, Medium or Low from the top bar.
+- **Lost graphics context.** If the browser takes the graphics context away (a driver reset, too many tabs), the app
+  stops, says so and offers to reload.
 - **Sound** starts with your first click or key press (browsers require that), and there is an on/off switch in the
   top bar.
 - **Privacy.** Once loaded, the app makes no network requests. The only thing it stores is your lesson progress, in
@@ -208,7 +216,8 @@ The polar diagram is not a separate model: it is the steady state of the same si
 **Graphics** ([`src/render`](src/render), see [docs/rendering.md](docs/rendering.md)). three.js on WebGL 2:
 
 - an FFT ocean with whitecaps, gust patches, a wake and the boat's own waves;
-- a physically based sky with drifting clouds and a sun that follows the time of day;
+- a physically based sky with volumetric cumulus clouds that drift with the wind, shade the sun and light up the
+  sea beneath them, and a sun that follows the time of day;
 - a procedural boat and crew;
 - sailcloth that luffs, flogs and glows when backlit, with telltales that react to the flow;
 - an AgX tone-mapped post chain.

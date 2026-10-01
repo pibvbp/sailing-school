@@ -78,6 +78,13 @@ interface QuizQuestion { q: string; options: string[]; correct: number; why: str
    every task step was completed.
    Ticks and best quiz scores are saved in the browser's `localStorage` (key `sailing-school:progress:v1`); if storage
    is blocked, they are kept in memory for the session.
+7. **Ending.** When the learner leaves the lessons (the lesson's ✕, or a switch to Free sail or the Sail lab), the
+   current step's `onExit` runs, the race marks are cleared, and the overlays and the camera go back to what the
+   learner had before the first lesson of the visit. A lesson borrows the view; it does not keep it.
+
+While a lesson runs, the app's own trim advice ("Luffing", "Backwinded main") is switched off: several steps ask for
+exactly that sail shape, and the step's text and hints are the teacher. Toasts for the other events (an accidental
+gybe, in irons, a round-up, a spinnaker collapse) still appear.
 
 Errors thrown by a lesson's code are caught and logged to the console, and the lesson carries on. The curriculum tests
 fail on any such error.
@@ -127,9 +134,17 @@ few groups:
 An empty list (`controls: []`) locks everything, for a step where the learner only watches.
 
 The cameras are `chase`, `helm`, `top` (looking straight down, wind at the top of the screen), `sail` (looking up
-the mainsail from under the boom) and `free`. The overlay keys are `windTriangle`, `forces`, `wheel`, `flow`,
+the mainsail from beside the boom) and `free`. The overlay keys are `windTriangle`, `forces`, `wheel`, `flow`,
 `flowSlice`, `aoa`, `xray`, `labels`, `laylines`, `track` and `telltaleCam`. Use `view(...)` so that each step shows
 exactly what it talks about.
+
+**Show only the arrows the text names.** With everything on, the Forces overlay draws about ten arrows and tags. A
+step that talks about two of them should ask for those: `c.app.setForceParts?.(['liftDrag'])` in `onEnter`, and
+`c.app.setForceParts?.(null)` in `onExit` to show them all again. The pieces are `total`, `drive`, `heel`,
+`liftDrag`, `windage`, `keel`, `rudder`, `resistance`, `righting` and `helm` (`ForcePart` in `types.ts`). Asked for
+alone, `liftDrag` becomes a picture of its own: the apparent wind arriving at the sail, with lift square to it and
+drag along it. Lessons 5 and 10 show the pattern. Then check the step in the browser: the words in the text should
+match the tags and colours on screen.
 
 ## Glossary terms
 

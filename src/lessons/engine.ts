@@ -8,9 +8,9 @@
 //  • Quiz after the last step; completion and best quiz scores persist in localStorage (all access in try/catch).
 import type { SimEventType, SimSnapshot } from '../sim/types';
 import {
-  CONTROL_GROUPS, CONTROL_KEYS,
-  type AppApi, type CatalogEntry, type ControlKey, type Lesson, type LessonActions, type LessonCtx,
-  type LessonInfo, type LessonView, type LessonViewModel, type Step, type StorageLike, type TaskStatus,
+  CONTROL_GROUPS, CONTROL_KEYS, OVERLAY_KEYS,
+  type AppApi, type CameraKey, type CatalogEntry, type ControlKey, type Lesson, type LessonActions, type LessonCtx,
+  type LessonInfo, type LessonView, type LessonViewModel, type OverlayKey, type Step, type StorageLike, type TaskStatus,
 } from './types';
 
 export const PROGRESS_KEY = 'sailing-school:progress:v1';
@@ -164,6 +164,8 @@ export class LessonRunner {
   private quizAnswer: number | null = null;
 
   private live: Set<ControlKey> | null = null;
+  /** The learner's own view, noted when lessons begin: lessons borrow the overlays and the camera, and give them back on exit. */
+  private viewBefore: { overlays: Record<OverlayKey, boolean>; camera: CameraKey | null } | null = null;
   private lastSimT: number | null = null;
   private readonly seenEvents = new Set<string>();
   private lastError = '';
@@ -311,6 +313,7 @@ export class LessonRunner {
     this.pending = null;
     this.leaveStep();
     if (this.lesson) this.app.setMarks([]);
+    this.restoreView();
     this.lesson = null;
     this.phase = 'idle';
     this.live = null;
@@ -325,8 +328,21 @@ export class LessonRunner {
 
   // ---- flow ----------------------------------------------------------------------------------
 
+  private restoreView(): void {
+    const before = this.viewBefore;
+    if (!before) return;
+    this.viewBefore = null;
+    const now = this.app.overlays();
+    for (const k of OVERLAY_KEYS) {
+      if (now[k] !== before.overlays[k]) this.app.setOverlay(k, before.overlays[k]);
+    }
+    if (before.camera !== null && this.app.cameraMode?.() !== before.camera) this.app.setCamera(before.camera);
+  }
+
   private begin(id: string): void {
     this.leaveStep();
+    // Going from one lesson straight into the next keeps the first note: it is the learner's own view.
+    this.viewBefore ??= { overlays: this.app.overlays(), camera: this.app.cameraMode?.() ?? null };
     const lesson = this.byId.get(id)!;
     this.lesson = lesson;
     this.ctx.data = {};

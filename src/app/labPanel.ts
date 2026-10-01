@@ -17,6 +17,16 @@ export interface LabParams {
 
 export const LAB_DEFAULTS: LabParams = { awa: 35 * DEG, tws: 12 * KN, tow: 2.5 };
 
+/** A tow faster than the wind cannot produce every apparent wind angle, so it stays just under the wind speed. */
+export function towLimit(tws: number): number {
+  return 0.95 * tws;
+}
+
+/** Apparent wind angle (level frame, same side) of true wind `tws` at angle `twa` on a boat moving at `u`. */
+export function awaForTwa(twa: number, u: number, tws: number): number {
+  return Math.atan2(tws * Math.sin(twa), tws * Math.cos(twa) + u);
+}
+
 /**
  * True wind angle (same side) that gives apparent wind angle `awa` when the boat moves at `u` through true
  * wind `tws`: from tan(awa) = w·sin θ / (w·cos θ + u) it follows that θ = awa + asin((u/w)·sin awa).
@@ -28,10 +38,19 @@ export function twaForAwa(awa: number, u: number, tws: number): number {
   return side * Math.min(Math.PI, a + Math.asin(k));
 }
 
+/** `p` with the tow speed held under its limit. */
+export function limited(p: LabParams): LabParams {
+  const tow = Math.min(p.tow, towLimit(p.tws));
+  return tow === p.tow ? p : { ...p, tow };
+}
+
 function readout(label: string): { el: HTMLElement; slot: TextSlot } {
   const v = h('span', 'sx-ro-v');
   return { el: h('span', 'sx-ro', [h('span', { class: 'sx-ro-k', text: label }), v]), slot: new TextSlot(v) };
 }
+
+/** Dynamic pressure of about 1 kn of apparent wind (Pa). */
+const CALM_Q = 0.5 * RHO_AIR * (1 * KN) ** 2;
 
 const fmtN = (n: number): string => `${Math.round(n)} N`;
 const sideTxt = (rad: number): string => {
@@ -66,9 +85,10 @@ class SailBlock {
     const n = s.sections.length;
     const q = n ? s.sections.reduce((a, x) => a + x.q, 0) / n : 0.5 * RHO_AIR;
     const qa = Math.max(1e-6, q * Math.max(s.area, 1e-6));
-    const cl = s.lift / qa, cd = s.drag / qa;
-    this.slots.cl.set(cl.toFixed(2));
-    this.slots.cd.set(cd.toFixed(2));
+    // In next to no wind the coefficients are a ratio of two near-zero numbers: show none rather than noise.
+    const calm = q < CALM_Q;
+    this.slots.cl.set(calm ? '—' : (s.lift / qa).toFixed(2));
+    this.slots.cd.set(calm ? '—' : (s.drag / qa).toFixed(2));
     this.slots.ld.set(Math.abs(s.drag) > 1 ? (s.lift / s.drag).toFixed(1) : '—');
     this.slots.lift.set(fmtN(s.lift));
     this.slots.drag.set(fmtN(s.drag));
@@ -82,6 +102,7 @@ export class LabPanel {
   private readonly awa: Slider;
   private readonly tws: Slider;
   private readonly tow: Slider;
+  private readonly towNote: HTMLElement;
   private readonly totals: Record<'drive' | 'side' | 'heel' | 'awa' | 'aws', TextSlot>;
   private readonly main = new SailBlock('Main');
   private readonly jib = new SailBlock('Jib');
@@ -90,7 +111,8 @@ export class LabPanel {
 
   constructor(private params: LabParams, onChange: (p: LabParams) => void) {
     const emit = (patch: Partial<LabParams>) => {
-      this.params = { ...this.params, ...patch };
+      this.params = limited({ ...this.params, ...patch });
+      this.reflectTow();
       onChange(this.params);
     };
     this.awa = new Slider({
@@ -105,11 +127,19 @@ export class LabPanel {
       onInput: (v) => emit({ tws: v * KN }),
     });
     this.tow = new Slider({
-      label: 'Tow speed', min: 0, max: 8, step: 0.1, format: (v) => `${v.toFixed(1)} kn`,
+      label: 'Tow speed', min: 0, max: 8, step: 0.1,
+      // Dragged past the limit, the number shown is still the speed in use; the thumb comes back on release.
+      format: (v) => `${Math.min(v, towLimit(this.params.tws) / KN).toFixed(1)} kn`,
       onInput: (v) => emit({ tow: v * KN }),
+      onRelease: () => this.tow.set(this.params.tow / KN),
+    });
+    this.towNote = h('p', {
+      class: 'sx-lab-note',
+      text: 'Held just under the wind speed: a faster tow could not give every wind angle.',
+      attrs: { hidden: true },
     });
     const drive = readout('Drive'), side = readout('Side force'), heel = readout('Heel');
-    const awa = readout('AWA'), aws = readout('AWS');
+    const awa = readout('Masthead AWA'), aws = readout('Masthead AWS');
     this.totals = { drive: drive.slot, side: side.slot, heel: heel.slot, awa: awa.slot, aws: aws.slot };
 
     this.el = h('div', { class: 'sx-trim sx-lab', attrs: { role: 'region', 'aria-label': 'Sail lab' } }, [
@@ -117,7 +147,7 @@ export class LabPanel {
       h('div', 'sx-panel-scroll', [
         h('section', 'sx-sec', [
           h('header', 'sx-sec-head', [h('h3', { class: 'sx-sec-title', text: 'Wind and tow' })]),
-          h('div', 'sx-sec-body', [this.awa.el, this.tws.el, this.tow.el]),
+          h('div', 'sx-sec-body', [this.awa.el, this.tws.el, this.tow.el, this.towNote]),
         ]),
         h('section', 'sx-sec', [
           h('header', 'sx-sec-head', [h('h3', { class: 'sx-sec-title', text: 'Whole rig' })]),
@@ -126,7 +156,10 @@ export class LabPanel {
         this.main.el,
         this.jib.el,
         this.spin.el,
-        h('p', { class: 'sx-panel-sub', text: 'Trim with the Trim panel and turn on Flow or Forces in View. Ease a sail until its luff telltales lift, then trim back: watch Cl rise and the drag fall.' }),
+        h('p', {
+          class: 'sx-lab-help',
+          text: 'Trim with the Trim panel and turn on Flow or Forces in View. Ease a sail until its luff telltales lift, then trim back: watch Cl rise and the drag fall. When the boat heels, the masthead reads a smaller wind angle than the one you set.',
+        }),
       ]),
     ]);
     this.sync(params);
@@ -134,10 +167,16 @@ export class LabPanel {
 
   /** Moves the sliders to `p` without emitting. */
   sync(p: LabParams): void {
-    this.params = p;
-    this.awa.set(p.awa / DEG);
-    this.tws.set(p.tws / KN);
-    this.tow.set(p.tow / KN);
+    this.params = limited(p);
+    this.awa.set(this.params.awa / DEG);
+    this.tws.set(this.params.tws / KN);
+    this.reflectTow();
+  }
+
+  /** The tow slider and its note follow the speed in use (the slider itself waits while it is being dragged). */
+  private reflectTow(): void {
+    this.tow.set(this.params.tow / KN);
+    this.towNote.hidden = this.params.tow < towLimit(this.params.tws) - 1e-6;
   }
 
   update(snap: SimSnapshot, dt: number): void {
