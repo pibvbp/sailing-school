@@ -142,6 +142,8 @@ export class Simulation {
     this.jib.tackSide = side;
     this.jib.workingSide = side;
     this.jib.syncControls(this.controls);
+    // A scenario that starts with the jib rolled away starts with it rolled away, not rolling.
+    this.jib.furl = Math.min(1, Math.max(0, this.controls.jibFurl));
     this.jib.gamma = side * sheetingAngle(this.controls.jibLead);
     if (side > 0) { this.jib.sheetPort = this.controls.jibSheet; this.jib.sheetStbd = 0; }
     else { this.jib.sheetStbd = this.controls.jibSheet; this.jib.sheetPort = 0; }

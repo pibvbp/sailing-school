@@ -387,6 +387,9 @@ export class Hud {
       if (this.rightCollapsed) add(this.view);
     }
     add(this.instruments.dialSlot);
+    // The dial's AWA / TWA key hangs outside the dial itself (above it on a desktop).
+    const caption = this.instruments.dialSlot.querySelector<HTMLElement>('.sx-dial-caption');
+    if (caption) add(caption, 4);
     if (this.overlayTelltale) add(this.pip);
     if (this.polar.visible) add(this.polar.el);
     const f = area.frame;

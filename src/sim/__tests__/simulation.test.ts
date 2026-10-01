@@ -87,6 +87,15 @@ describe('simulation', () => {
     expect(events.some((e) => e.type === 'roundUp')).toBe(true);
   });
 
+  it('starts with the jib where the controls say: rolled away, half rolled or set', () => {
+    for (const f of [1, 0.5, 0]) {
+      const sim = new Simulation({ wind: wind(10, 0), boat: { psi: 90 * DEG, u: 2.5 }, controls: { jibFurl: f } });
+      const j = sim.snapshot().sails.jib;
+      expect(j.furl).toBe(f);
+      expect(j.set).toBe(f < 0.97);
+    }
+  });
+
   it('is deterministic', () => {
     const a = new Simulation({ ...reach, wind: { ...reach.wind, gustiness: 0.8, seed: 11 } });
     const b = new Simulation({ ...reach, wind: { ...reach.wind, gustiness: 0.8, seed: 11 } });
