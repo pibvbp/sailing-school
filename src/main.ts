@@ -2,8 +2,29 @@ import { App } from './app/App';
 import { CURRICULUM } from './lessons/curriculum';
 import { FloatTargetsUnavailableError, WebGL2UnavailableError } from './render/core/renderer';
 
+import type { CloudMirrorStats } from './render/env/volumetricClouds';
+
 declare global {
-  interface Window { __ready?: boolean }
+  interface Window {
+    __ready?: boolean;
+    /** `?suncheck=1`: the CPU mirror of the cloud field against the GPU's panorama (see e2e/clouds.spec.ts). */
+    __sunCheck?: ({ volumetric: true } & CloudMirrorStats) | { volumetric: false; skipped: string };
+  }
+}
+
+/**
+ * `?suncheck=1`, for the end-to-end suite: once the scene is up, compare the CPU mirror of the cloud field (it
+ * dims the sun's light) with the panorama the GPU drew and publish the result. The sky is private to the App, so
+ * it is reached through the instance here rather than through a new App method.
+ */
+function scheduleSunCheck(app: App): void {
+  const run = (): void => {
+    if (!window.__ready) { requestAnimationFrame(run); return; }
+    const sky = (app as unknown as { sky?: { cloudMirrorCheck?: () => CloudMirrorStats | null } }).sky;
+    const stats = sky?.cloudMirrorCheck?.() ?? null;
+    window.__sunCheck = stats ? { volumetric: true, ...stats } : { volumetric: false, skipped: 'no volumetric clouds' };
+  };
+  requestAnimationFrame(run);
 }
 
 function showFallback(title: string, message: string, reload = false): void {
@@ -34,6 +55,7 @@ function boot(): void {
     if (new URLSearchParams(location.search).has('forceNoWebGL2')) throw new WebGL2UnavailableError();
     const app = new App(canvas, ui, { lessons: [...CURRICULUM] });
     app.start();
+    if (new URLSearchParams(location.search).has('suncheck')) scheduleSunCheck(app);
     // A backgrounded phone tab, a driver reset or a GPU switch can take the graphics context away. Baked textures,
     // the wave spectrum and timer queries die with it, so the honest recovery is a fresh start.
     canvas.addEventListener('webglcontextlost', (e) => {

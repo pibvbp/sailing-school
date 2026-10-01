@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cloudNoise } from '../cloudNoise';
 import {
-  CLOUD_BASE_M, CLOUD_MAX_DISTANCE_M, CLOUD_TOP_M, CloudField, EARTH_RADIUS_M, OPAQUE_CLOUD_SUN, cloudAreaFraction,
+  CLOUD_BASE_M, CLOUD_MAX_DISTANCE_M, CLOUD_TOP_M, CloudField, EARTH_RADIUS_M, FADE_START, OPAQUE_CLOUD_SUN, cloudAreaFraction,
   cloudFieldForCover, panoDirection, panoDisc, panoUv, rayAltitude, shellDistance, sunLightThrough,
 } from '../cloudField';
 
@@ -149,28 +149,70 @@ describe('sun transmittance', () => {
     expect(sunLightThrough(40)).toBeCloseTo(OPAQUE_CLOUD_SUN, 6);
   });
 
-  it('agrees with what is seen: the light is full where the disc is clear, and dim where a cloud covers it', () => {
+  it('marches the real slant path: the same optical depth as a brute-force walk through the density', () => {
+    // An independent integrator: 4 m steps along the ray over an exactly spherical sea (not the march's shell
+    // entry and exit, its second-order altitude or its 96 steps). If the march's geometry, fade or stepping went
+    // wrong, or if `opticalDepth` returned anything unrelated to the clouds on the path, this fails.
     const field = new CloudField(noise, 0.5);
-    const sun = { x: 0.32, y: 0.68, z: -0.657 };
-    const len = Math.hypot(sun.x, sun.y, sun.z);
-    const [sx, sy, sz] = [sun.x / len, sun.y / len, sun.z / len];
+    const p = field.params;
+    const reference = (ox: number, oy: number, oz: number, dx: number, dy: number, dz: number): number => {
+      const step = 4;
+      const flat = Math.hypot(dx, dz);
+      let sum = 0;
+      for (let t = step / 2; t < CLOUD_MAX_DISTANCE_M; t += step) {
+        const alt = Math.hypot(EARTH_RADIUS_M + oy + t * dy, t * flat) - EARTH_RADIUS_M;
+        if (alt >= p.top) break;
+        if (alt <= p.base) continue;
+        const u = Math.min(1, Math.max(0, (t - FADE_START * CLOUD_MAX_DISTANCE_M) / ((1 - FADE_START) * CLOUD_MAX_DISTANCE_M)));
+        sum += field.density(ox + dx * t, alt, oz + dz * t) * (1 - u * u * (3 - 2 * u)) * step;
+      }
+      return sum * p.sigma;
+    };
+    const differences: number[] = [];
+    let sameSide = 0;
     let clear = 0;
     let hidden = 0;
-    for (let i = 0; i < 400; i++) {
+    const rays = 240;
+    for (let i = 0; i < rays; i++) {
+      // Suns from 37° to 80° up, all round the compass, seen from eyes spread over 20 km.
+      const elevation = 0.65 + 0.75 * ((i * 0.381966) % 1);
+      const azimuth = i * 2.39996;
+      const [dx, dy, dz] = [Math.cos(elevation) * Math.cos(azimuth), Math.sin(elevation), Math.cos(elevation) * Math.sin(azimuth)];
       const ox = ((i * 0.618034) % 1) * 20000;
       const oz = ((i * 0.754878) % 1) * 20000;
-      const tau = field.opticalDepth(ox, 2, oz, sx, sy, sz);
-      const seen = field.viewTransmittance(ox, 2, oz, sx, sy, sz);
-      const light = field.sunTransmittance(ox, 2, oz, sx, sy, sz);
-      expect(seen).toBeCloseTo(Math.exp(-tau), 12);
-      expect(light).toBeCloseTo(sunLightThrough(tau), 12);
-      // The light never dims more than the disc does (forward scattering), and never without a cloud.
-      expect(light).toBeGreaterThanOrEqual(seen - 1e-12);
-      if (tau === 0) { expect(light).toBe(1); clear++; }
-      if (seen < 0.05) { expect(light).toBeLessThan(0.25); hidden++; }
+      const marched = Math.exp(-field.opticalDepth(ox, 2, oz, dx, dy, dz));
+      const walked = Math.exp(-reference(ox, 2, oz, dx, dy, dz));
+      differences.push(Math.abs(marched - walked));
+      if ((marched < 0.5) === (walked < 0.5)) sameSide++;
+      if (walked > 0.99) clear++;
+      if (walked < 0.01) hidden++;
     }
+    differences.sort((a, b) => a - b);
+    const mean = differences.reduce((s, d) => s + d, 0) / rays;
+    // Measured: mean 0.0005, worst ray 0.022, every ray on the same side. For comparison, a march 300 m off to
+    // the side gives a mean of 0.17, one returning half the optical depth 0.014, twice the depth 0.009.
+    expect(mean).toBeLessThan(0.004);
+    expect(differences[Math.floor(rays * 0.9)]!).toBeLessThan(0.005);
+    expect(differences[rays - 1]!).toBeLessThan(0.06);
+    expect(sameSide / rays).toBeGreaterThanOrEqual(0.995);
+    // The comparison covered clear sky and solid cloud alike.
     expect(clear).toBeGreaterThan(40);
     expect(hidden).toBeGreaterThan(40);
+  });
+
+  it('never dims the light more than it hides the disc, and not at all without a cloud on the path', () => {
+    const field = new CloudField(noise, 0.5);
+    const [sx, sy, sz] = [0.4257, 0.6801, -0.5969];
+    let clear = 0;
+    for (let i = 0; i < 300; i++) {
+      const ox = ((i * 0.618034) % 1) * 20000;
+      const oz = ((i * 0.754878) % 1) * 20000;
+      const seen = field.viewTransmittance(ox, 2, oz, sx, sy, sz);
+      const light = field.sunTransmittance(ox, 2, oz, sx, sy, sz);
+      expect(light).toBeGreaterThanOrEqual(seen - 1e-12);
+      if (seen === 1) { expect(light).toBe(1); clear++; }
+    }
+    expect(clear).toBeGreaterThan(40);
   });
 
   it('is continuous as the clouds drift past the sun: no jumps in the light', () => {

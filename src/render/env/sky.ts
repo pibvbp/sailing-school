@@ -7,8 +7,8 @@ import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { CloudLayer, cloudUniforms, patchCloudShader } from './clouds';
 import { CLOUD_DOME_GLSL, CLOUD_DOME_PARS_GLSL } from './cloudShaders';
-import { EnvironmentBaker } from './envBake';
-import { cloudQualityFor, VolumetricClouds } from './volumetricClouds';
+import { EnvironmentBaker, TEXELS_PER_UNIT, URGENT_BAKE_FACTOR } from './envBake';
+import { cloudQualityFor, VolumetricClouds, type CloudMirrorStats } from './volumetricClouds';
 import type { QualitySettings, SkyState } from '../core/types';
 
 // ---------------------------------------------------------------------------------------------------------
@@ -304,6 +304,12 @@ export class SkySystem implements SkyState {
   private readonly envBaker: EnvironmentBaker | null = null;
   private pmremTarget: THREE.WebGLRenderTarget | null = null;
   private envDirty = true;
+  /** The pending bake follows a change of light (time of day, cover): it runs in larger units. */
+  private envUrgent = false;
+  /** The bake in flight is such a bake. */
+  private bakingUrgent = false;
+  /** Fraction of a bake unit carried over between frames. */
+  private bakeCredit = 0;
   private sinceBake = Infinity;
 
   private clearSunIntensity = 0;
@@ -312,7 +318,7 @@ export class SkySystem implements SkyState {
   private readonly skyAmbient = new THREE.Color();
   private readonly eye = new THREE.Vector3().copy(DEFAULT_EYE);
   /** False where the GPU cannot render float targets, or the caller asked for the 2-D layer. */
-  private readonly allowVolumetric: boolean;
+  private allowVolumetric: boolean;
   /** The volumetric clouds while a tier without them is active (kept so that switching back is cheap). */
   private parked: VolumetricClouds | null = null;
   private seaWaterLuminance = 0;
@@ -371,8 +377,21 @@ export class SkySystem implements SkyState {
       this.sunIntensity = this.clearSunIntensity * this.cloudSun;
       // The first panorama is marched in one go so that the first frame and the first bake already show clouds.
       this.volumetric.renderAll(e, s);
+      if (!this.volumetric.selfTest()) this.abandonVolumetric();
     }
     this.bakeEnvironment();
+  }
+
+  /**
+   * The march did not run on this GPU (a program failed to compile, or the layered half-float target is
+   * incomplete): give the memory back and stay on the 2-D layer for the rest of the session (review M-2).
+   */
+  private abandonVolumetric(): void {
+    this.volumetric?.dispose();
+    this.volumetric = null;
+    this.allowVolumetric = false;
+    this.useVolumetric(false);
+    this.refreshLighting();
   }
 
   setTimeOfDay(hours: number): void {
@@ -406,12 +425,23 @@ export class SkySystem implements SkyState {
       this.useVolumetric(true);
       this.refreshLighting();
       this.volumetric.renderAll(this.eye, this.sunDirection);
+      if (!this.volumetric.selfTest()) this.abandonVolumetric();
     } else if (this.volumetric) {
+      // Keep the field (drift, cover), give the panoramas' memory back while they are not shown (review M-7).
       this.parked = this.volumetric;
+      this.parked.release();
       this.volumetric = null;
       this.useVolumetric(false);
       this.refreshLighting();
     }
+  }
+
+  /**
+   * Debug and end-to-end check (`?suncheck=1`): does the CPU mirror of the cloud field, which dims the sun's
+   * light, match the panorama the GPU marched? Null on the 2-D layer. Slow: never per frame.
+   */
+  cloudMirrorCheck(): CloudMirrorStats | null {
+    return this.volumetric ? this.volumetric.compareWithField(this.eye, this.sunDirection) : null;
   }
 
   /** Point both sky materials at the cloud panorama, or back at the 2-D layer. */
@@ -448,14 +478,24 @@ export class SkySystem implements SkyState {
     this.sinceBake += dt;
     if (this.volumetric && this.cloudCover > 0 && this.sinceBake >= CLOUD_BAKE_INTERVAL_S) this.envDirty = true;
     const baker = this.envBaker;
-    if (baker && !baker.busy && this.envDirty && this.sinceBake >= MIN_BAKE_INTERVAL_S) this.beginEnvironmentBake();
-    const baking = baker?.busy === true;
-    if (baking) baker.step();
+    // A change of light does not wait behind a slow drift bake: it restarts the bake with large units.
+    if (baker && this.envDirty && this.sinceBake >= MIN_BAKE_INTERVAL_S && (!baker.busy || (this.envUrgent && !this.bakingUrgent))) {
+      this.beginEnvironmentBake();
+    }
+    let baked = false;
+    if (baker?.busy) {
+      // A unit per sixtieth of a second (capped), so a bake takes the same time at any frame rate.
+      this.bakeCredit = Math.min(this.bakeCredit + dt * 60, 3);
+      for (; this.bakeCredit >= 1 && baker.busy; this.bakeCredit--) {
+        baker.step();
+        baked = true;
+      }
+    }
 
     let target: number;
     if (this.volumetric) {
       this.volumetric.advance(dt, windFromRad, windSpeed);
-      this.volumetric.update(this.eye, this.sunDirection, baking ? 0 : undefined);
+      this.volumetric.update(this.eye, this.sunDirection, dt, !baked);
       target = this.volumetric.sunTransmittance(this.eye, this.sunDirection);
     } else {
       this.clouds.applyTo(this.material.uniforms);
@@ -552,6 +592,7 @@ export class SkySystem implements SkyState {
       u['cloudHazeGrey']!.value = this.cloudCover * this.cloudCover;
     }
     this.envDirty = true;
+    this.envUrgent = true;
   }
 
   /**
@@ -598,6 +639,8 @@ export class SkySystem implements SkyState {
   /** Bake the environment in one call (start-up; ≈ 10 ms). */
   private bakeEnvironment(): void {
     this.envDirty = false;
+    this.envUrgent = false;
+    this.bakingUrgent = false;
     this.sinceBake = 0;
     if (!this.cubeTarget || !this.envBaker) return;
     this.pmremTarget = this.envBaker.bakeNow(this.renderEnvCube, this.cubeTarget.texture, this.pmremTarget);
@@ -608,10 +651,14 @@ export class SkySystem implements SkyState {
 
   /** Re-bake the environment a unit per frame into the same texture (falls back to the one call if it cannot). */
   private beginEnvironmentBake(): void {
-    if (!this.cubeTarget || !this.envBaker || !this.pmremTarget || !this.envBaker.begin(this.renderEnvCube, this.cubeTarget.texture, this.pmremTarget)) {
+    const urgent = this.envUrgent;
+    const units = urgent ? TEXELS_PER_UNIT * URGENT_BAKE_FACTOR : TEXELS_PER_UNIT;
+    this.envUrgent = false;
+    if (!this.cubeTarget || !this.envBaker || !this.pmremTarget || !this.envBaker.begin(this.renderEnvCube, this.cubeTarget.texture, this.pmremTarget, units)) {
       this.bakeEnvironment();
       return;
     }
+    this.bakingUrgent = urgent;
     this.envDirty = false;
     this.sinceBake = 0;
   }

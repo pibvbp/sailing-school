@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cloudQualityFor, panoTiles } from '../volumetricClouds';
+import { cloudQualityFor, GENERATION_SECONDS, MAX_TILES_PER_FRAME, panoTiles, tilesDue } from '../volumetricClouds';
 import { planBake } from '../envBake';
 import { panoDisc } from '../cloudField';
 import { TIER_ORDER } from '../../core/types';
@@ -48,12 +48,45 @@ describe('cloud quality tiers', () => {
       lastTexels = q.size * q.size;
       lastSteps = q.steps * q.subSteps;
     }
-    // One tile a frame on the default tier: a generation takes about a second at 60 fps.
-    const high = cloudQualityFor('high')!;
-    expect(high.tilesPerFrame).toBe(1);
-    const frames = panoTiles(high.size, high.tile).length / high.tilesPerFrame;
-    expect(frames).toBeGreaterThan(30);
-    expect(frames).toBeLessThan(90);
+  });
+});
+
+describe('tile schedule', () => {
+  const tiles = panoTiles(1024, 128).length;
+  /** Tiles marched over `seconds` of frames `dt` long, and the most in any one frame. */
+  const run = (dt: number, seconds: number): { total: number; most: number } => {
+    let credit = 0;
+    let total = 0;
+    let most = 0;
+    for (let t = 0; t < seconds - 1e-9; t += dt) {
+      const due = tilesDue(credit, dt, tiles);
+      credit = due.credit;
+      total += due.tiles;
+      most = Math.max(most, due.tiles);
+    }
+    return { total, most };
+  };
+
+  it('marches a generation a second at any frame rate', () => {
+    for (const fps of [30, 60, 90, 120, 144]) {
+      const { total } = run(1 / fps, 10);
+      expect(Math.abs(total - (10 * tiles) / GENERATION_SECONDS)).toBeLessThanOrEqual(2);
+    }
+    expect(run(1 / 60, 5).most).toBe(1);
+    expect(run(1 / 30, 5).most).toBe(2);
+    expect(run(1 / 120, 5).most).toBe(1);
+  });
+
+  it('never lets a slow frame pile work on the next', () => {
+    // A half-second hitch owes 30 tiles; it gets the cap, and the debt is dropped, not carried.
+    const hitch = tilesDue(0, 0.5, tiles);
+    expect(hitch.tiles).toBe(MAX_TILES_PER_FRAME);
+    expect(hitch.credit).toBeLessThan(1);
+    expect(tilesDue(hitch.credit, 1 / 60, tiles).tiles).toBeLessThanOrEqual(1);
+    // At 10 fps the cap holds every frame: the generation simply takes longer.
+    expect(run(0.1, 5).most).toBe(MAX_TILES_PER_FRAME);
+    expect(tilesDue(0, 0, tiles)).toEqual({ tiles: 0, credit: 0 });
+    expect(tilesDue(0.4, -1, tiles).tiles).toBe(0);
   });
 });
 

@@ -19,7 +19,6 @@ import { createBloom, HdrFxaaEffect, HdrGuardEffect, PostChain, VibranceEffect, 
 import { QualityGovernor, tierSettings, type QualityTier } from '../src/render/core/quality';
 import { FrameTimer } from '../src/render/core/frameTimer';
 import { ATMOSPHERE, SkySystem } from '../src/render/env/sky';
-import { panoDirection, panoDisc } from '../src/render/env/cloudField';
 import { cloudNoiseGenerationMs } from '../src/render/env/cloudNoise';
 import { Lighting } from '../src/render/env/lighting';
 import { Land } from '../src/render/env/land';
@@ -343,13 +342,15 @@ function benchmark(dt: number): Record<string, number> {
 }
 
 /**
- * ?envcheck=1: the strip-wise environment bake must give the texture three's one-call bake gives. Bakes both ways
- * from the same sky in the same frame and compares every texel of the CubeUV target.
+ * ?envcheck=1: the strip-wise environment bake must give the texture three's one-call bake gives, for a sky that
+ * CHANGED since the previous bake, with both unit sizes (the small units of a drift bake and the large ones of a
+ * bake that follows a change of light). Compares every texel of the CubeUV target.
  */
 function checkEnvironmentBake(): Record<string, number> {
   const s = sky as unknown as {
     pmremTarget: THREE.WebGLRenderTarget;
     envBaker: { busy: boolean; unitCount: number; step(): boolean };
+    envUrgent: boolean;
     bakeEnvironment(): void;
     beginEnvironmentBake(): void;
   };
@@ -359,24 +360,54 @@ function checkEnvironmentBake(): Record<string, number> {
     renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, buf);
     return buf;
   };
+  // The texture holds sky A. The sky then CHANGES to B (six hours on): a strip-wise bake that left any texel
+  // behind would still show A there. Bake B strip-wise and read; bake B in one call and read; compare.
+  // (Baking both ways from the same sky, as this check once did, cannot see a stale texel.)
+  const hours = sky.hours;
+  let before: Uint16Array = new Uint16Array(0);
+  const stripwise = (urgent: boolean): { steps: number; units: number; texels: Uint16Array } => {
+    sky.setTimeOfDay(hours);
+    s.bakeEnvironment();
+    before = read();
+    sky.setTimeOfDay(hours + 6);
+    s.envUrgent = urgent;
+    s.beginEnvironmentBake();
+    let steps = 0;
+    while (s.envBaker.busy && steps < 1000) { s.envBaker.step(); steps++; }
+    return { steps, units: s.envBaker.unitCount, texels: read() };
+  };
+  const drift = stripwise(false);
+  const light = stripwise(true);
   s.bakeEnvironment();
   const whole = read();
-  s.beginEnvironmentBake();
-  let steps = 0;
-  while (s.envBaker.busy && steps < 1000) { s.envBaker.step(); steps++; }
-  const strips = read();
+  sky.setTimeOfDay(hours);
   renderer.setRenderTarget(null);
-  let worst = 0;
-  let differing = 0;
+  const compare = (strips: Uint16Array): { differing: number; worst: number } => {
+    let worst = 0;
+    let differing = 0;
+    for (let i = 0; i < whole.length; i++) {
+      if (whole[i] === strips[i]) continue;
+      differing++;
+      worst = Math.max(worst, Math.abs(THREE.DataUtils.fromHalfFloat(whole[i]!) - THREE.DataUtils.fromHalfFloat(strips[i]!)));
+    }
+    return { differing, worst };
+  };
+  let changed = 0;
   let peak = 0;
   for (let i = 0; i < whole.length; i++) {
-    const a = THREE.DataUtils.fromHalfFloat(whole[i]!);
-    const b = THREE.DataUtils.fromHalfFloat(strips[i]!);
-    if (whole[i] !== strips[i]) differing++;
-    worst = Math.max(worst, Math.abs(a - b));
-    peak = Math.max(peak, Math.abs(a));
+    if (whole[i] !== before[i]) changed++;
+    peak = Math.max(peak, Math.abs(THREE.DataUtils.fromHalfFloat(whole[i]!)));
   }
-  return { steps, units: s.envBaker.unitCount, texels: whole.length / 4, differingValues: differing, worstAbsDifference: worst, peakValue: peak };
+  const a = compare(drift.texels);
+  const b = compare(light.texels);
+  return {
+    texels: whole.length / 4,
+    // Values (four per texel) that the change of sky altered at all: the check means something only if many did.
+    valuesChangedBySky: changed,
+    peakValue: peak,
+    driftBakeSteps: drift.steps, driftBakeUnits: drift.units, driftBakeDifferingValues: a.differing, driftBakeWorstDifference: a.worst,
+    lightBakeSteps: light.steps, lightBakeUnits: light.units, lightBakeDifferingValues: b.differing, lightBakeWorstDifference: b.worst,
+  };
 }
 
 /**
@@ -385,44 +416,8 @@ function checkEnvironmentBake(): Record<string, number> {
  * rays, over a grid of directions.
  */
 function checkSunConsistency(): Record<string, number> {
-  const v = sky.volumetric;
-  if (!v) return {};
-  const eye = camera.position.clone();
-  v.renderAll(eye, sky.sunDirection);
-  const target = v.newest;
-  const size = target.width;
-  const buf = new Uint16Array(size * size * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, size, size, buf);
-  renderer.setRenderTarget(null);
-  const disc = panoDisc(size);
-  const dir = { x: 0, y: 0, z: 0 };
-  let n = 0;
-  let sumAbs = 0;
-  let worst = 0;
-  let agree = 0;
-  let covered = 0;
-  let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
-  const stride = Math.floor(size / 48);
-  for (let j = stride >> 1; j < size; j += stride) {
-    for (let i = stride >> 1; i < size; i += stride) {
-      const u = (i + 0.5) / size;
-      const w = (j + 0.5) / size;
-      if (Math.hypot(u - 0.5, w - 0.5) * 2 > disc * 0.97) continue;
-      panoDirection(u, w, disc, dir);
-      const gpu = THREE.DataUtils.fromHalfFloat(buf[(j * size + i) * 4 + 3]!);
-      // The march exactly as the per-frame sun light runs it (its default step count).
-      const cpu = v.field.viewTransmittance(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z);
-      n++;
-      sumAbs += Math.abs(gpu - cpu);
-      worst = Math.max(worst, Math.abs(gpu - cpu));
-      if ((gpu < 0.5) === (cpu < 0.5)) agree++;
-      if (cpu < 0.5) covered++;
-      sa += gpu; sb += cpu; saa += gpu * gpu; sbb += cpu * cpu; sab += gpu * cpu;
-    }
-  }
-  const cov = sab / n - (sa / n) * (sb / n);
-  const correlation = cov / Math.sqrt(Math.max(1e-12, (saa / n - (sa / n) ** 2) * (sbb / n - (sb / n) ** 2)));
-  return { rays: n, meanAbsDifference: sumAbs / n, worstDifference: worst, sameSideOfHalf: agree / n, coveredFraction: covered / n, correlation };
+  // The comparison itself lives in VolumetricClouds.compareWithField, so the app runs the very same check.
+  return { ...(sky.cloudMirrorCheck() ?? {}) };
 }
 
 /**
@@ -438,7 +433,8 @@ function benchmarkClouds(dt: number): Record<string, number> {
   const out: Record<string, number> = {};
   if (!v) return out;
   const n = v.tileCount;
-  const perFrame = v.quality.tilesPerFrame;
+  // Tiles a 60 Hz frame marches (see tilesDue: a generation per second).
+  const perFrame = Math.max(1, Math.round(n / 60));
   const frames = Math.ceil(n / perFrame);
   const frame = () => { post.render(dt); closeFrame(); };
   let tile = 0;
@@ -631,6 +627,9 @@ renderer.setAnimationLoop((now) => {
   ripples.offset.set(t * 0.004 * Math.sin(windFrom + Math.PI), t * 0.004 * Math.cos(windFrom + Math.PI));
   if (exposureBias !== 1) renderer.toneMappingExposure = sky.exposure * exposureBias;
 
+  // ?drag=1: a time-of-day drag as the app's slider sends it (a change every 120 ms): the environment must keep
+  // up AND the cloud panorama must keep marching (review M-4). Read __env.cloudGenerations afterwards.
+  if (params.get('drag') === '1' && frames % 7 === 0) sky.setTimeOfDay(hour + frames * 0.0005);
   // ?tierflip=1: down to the low tier (2-D cloud layer) and back, then through medium and ultra.
   if (params.get('tierflip') === '1') {
     const flips: Record<number, QualityTier> = { 40: 'low', 80: 'high', 120: 'medium', 160: 'ultra', 200: 'high' };

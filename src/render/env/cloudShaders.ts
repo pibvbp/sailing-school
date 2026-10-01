@@ -4,7 +4,10 @@
 // (SIGGRAPH 2016) for the lighting terms. No code was taken from either.
 //
 // `CLOUD_DENSITY_GLSL` is mirrored on the CPU by `CloudField.density()` (cloudField.ts): change both together.
-import { CLOUD_MAX_DISTANCE_M, DETAIL_MEAN, EARTH_RADIUS_M, PANO_TEXEL_RAD, PANO_WARP, BASE_RAMP, TOP_RAMP, SHAPE_LOW, SHAPE_GAIN, DENSITY_GAIN } from './cloudField';
+import {
+  BASE_RAMP, CARVE_AT_BASE, CLOUD_MAX_DISTANCE_M, DENSITY_AT_BASE, DENSITY_GAIN, DETAIL_LOD_CUTOFF, DETAIL_MEAN, EARTH_RADIUS_M, FADE_START,
+  FOOTPRINT_STEPS, FOOTPRINT_TEXELS, PANO_TEXEL_RAD, PANO_WARP, SHAPE_GAIN, SHAPE_LOW, TOP_AT_OUTLINE, TOP_RAMP,
+} from './cloudField';
 
 const f = (x: number): string => (Number.isInteger(x) ? `${x}.0` : `${x}`);
 
@@ -50,6 +53,13 @@ const float TOP_RAMP = ${f(TOP_RAMP)};
 const float SHAPE_LOW = ${f(SHAPE_LOW)};
 const float SHAPE_GAIN = ${f(SHAPE_GAIN)};
 const float DENSITY_GAIN = ${f(DENSITY_GAIN)};
+const float TOP_AT_OUTLINE = ${f(TOP_AT_OUTLINE)};
+const float CARVE_AT_BASE = ${f(CARVE_AT_BASE)};
+const float DENSITY_AT_BASE = ${f(DENSITY_AT_BASE)};
+const float FOOTPRINT_STEPS = ${f(FOOTPRINT_STEPS)};
+const float FOOTPRINT_TEXELS = ${f(FOOTPRINT_TEXELS)};
+const float DETAIL_LOD_CUTOFF = ${f(DETAIL_LOD_CUTOFF)};
+const float FADE_START = ${f(FADE_START)};
 
 // The cloud's smooth envelope from the weather map alone (one 2-D lookup): 0 outside every cloud.
 // xz: metres from the panorama's origin; alt: metres above the sea; hrel: height within the local cloud, 0…1.
@@ -62,7 +72,7 @@ float cloudEnvelope(vec2 xz, float alt, out float hrel) {
   if (over <= 0.0) return 0.0;
   float m = min(over * uCover.y, 1.0);
   float grow = min(over * uCover.z, 1.0);
-  float topF = uCover.w * mix(uCarve.x, 1.0, w.g) * (0.25 + 0.75 * sqrt(grow));
+  float topF = uCover.w * mix(uCarve.x, 1.0, w.g) * (TOP_AT_OUTLINE + (1.0 - TOP_AT_OUTLINE) * sqrt(grow));
   hrel = hf / topF;
   if (hrel >= 1.0) return 0.0;
   return m * min(hf * BASE_RAMP, 1.0) * min((1.0 - hrel) * TOP_RAMP, 1.0);
@@ -72,14 +82,14 @@ float cloudEnvelope(vec2 xz, float alt, out float hrel) {
 float cloudCarve(float envelope, float hrel, vec2 xz, float alt, float lodShape, float lodDetail) {
   vec3 p = vec3(xz.x, alt, xz.y);
   float shape = textureLod(uShape, p * uTileInv.y + uShapeOff, lodShape).r;
-  float carve = (1.0 - clamp((shape - SHAPE_LOW) * SHAPE_GAIN, 0.0, 1.0)) * uCarve.y * mix(0.6, 1.0, hrel);
+  float carve = (1.0 - clamp((shape - SHAPE_LOW) * SHAPE_GAIN, 0.0, 1.0)) * uCarve.y * mix(CARVE_AT_BASE, 1.0, hrel);
   float d = (envelope - carve) / (1.0 - carve);
   if (d <= 0.0) return 0.0;
   float detail = lodDetail < 0.0 ? DETAIL_MEAN : textureLod(uDetail, p * uTileInv.z + uDetailOff, lodDetail).r;
   float fray = (1.0 - detail) * uCarve.z;
   d = (d - fray) / (1.0 - fray);
   if (d <= 0.0) return 0.0;
-  return min(d * DENSITY_GAIN, 1.0) * mix(0.55, 1.0, hrel);
+  return min(d * DENSITY_GAIN, 1.0) * mix(DENSITY_AT_BASE, 1.0, hrel);
 }
 
 float cloudDensity(vec2 xz, float alt, float lodShape, float lodDetail) {
@@ -179,27 +189,31 @@ void main() {
     float firstStep = max(uLight.x, 0.6 * subLen);
     float T = 1.0;
     vec3 sum = vec3(0.0);
-    bool wasIn = false;
-    // Coarse steps test the envelope alone (one 2-D lookup). Where a cloud is present — at this step or the one
-    // before, so its far edge is not cut short — the step is refined into lit sub-steps.
+    // Coarse steps test the envelope alone (2-D lookups): at the step's start, middle and end. A step that
+    // touches cloud at any of them is refined into lit sub-steps. The test points do not move with the jitter, so
+    // whether a thin, distant cloud is found does not change from one generation to the next (review M-5: a
+    // single jittered test made such clouds twinkle near the horizon).
+    float hrel;
+    bool startIn = false;
     for (int i = 0; i < CLOUD_STEPS; i++) {
       float ts = t0 + float(i) * stepLen;
-      float tc = ts + jitter * stepLen;
-      float hrel;
-      bool isIn = cloudEnvelope(dir.xz * tc, uCamHeight + tc * dy + tc * tc * INV_2R, hrel) > 0.0;
-      if (isIn || wasIn) {
+      float tm = ts + 0.5 * stepLen;
+      float te = ts + stepLen;
+      bool midIn = cloudEnvelope(dir.xz * tm, uCamHeight + tm * dy + tm * tm * INV_2R, hrel) > 0.0;
+      bool endIn = cloudEnvelope(dir.xz * te, uCamHeight + te * dy + te * te * INV_2R, hrel) > 0.0;
+      if (startIn || midIn || endIn) {
         for (int k = 0; k < SUB_STEPS; k++) {
           float t = ts + (float(k) + jitter) * subLen;
           float alt = uCamHeight + t * dy + t * t * INV_2R;
           vec2 xz = dir.xz * t;
           float envelope = cloudEnvelope(xz, alt, hrel);
           if (envelope <= 0.0) continue;
-          float footprint = max(0.5 * subLen, 1.5 * t * TEXEL_RAD);
+          float footprint = max(FOOTPRINT_STEPS * subLen, FOOTPRINT_TEXELS * t * TEXEL_RAD);
           float lodShape = max(0.0, log2(footprint / uTexel.x));
           float lodDetail = log2(footprint / uTexel.y);
-          float d = cloudCarve(envelope, hrel, xz, alt, lodShape, lodDetail > 4.0 ? -1.0 : max(0.0, lodDetail));
+          float d = cloudCarve(envelope, hrel, xz, alt, lodShape, lodDetail > DETAIL_LOD_CUTOFF ? -1.0 : max(0.0, lodDetail));
           if (d <= 0.0) continue;
-          d *= 1.0 - smoothstep(0.7 * MAX_DIST, MAX_DIST, t);
+          d *= 1.0 - smoothstep(FADE_START * MAX_DIST, MAX_DIST, t);
           float a = 1.0 - exp(-d * uSlab.w * subLen);
           // Sunlight: the direct beam with the droplets' forward-peaked phase, plus light that has scattered
           // many times on the way in (it fades slowly with depth and has forgotten its direction). Thin wisps
@@ -217,7 +231,7 @@ void main() {
         }
         if (T < 0.004) { T = 0.0; break; }
       }
-      wasIn = isIn;
+      startIn = endIn;
     }
     result = vec4(sum, T);
   }
@@ -249,7 +263,9 @@ out vec4 outColor;
 vec4 marched(ivec2 p) {
   p = clamp(p, ivec2(0), ivec2(uLayout.z - 1));
   vec2 c = vec2(p) + 0.5 - 0.5 * float(uLayout.z);
-  if (dot(c, c) > 0.25 * float(uLayout.z * uLayout.z)) return vec4(0.0, 0.0, 0.0, 1.0);
+  // The square is taken in float: as an int product it is beyond a 16-bit int (review I-2).
+  float half_ = 0.5 * float(uLayout.z);
+  if (dot(c, c) > half_ * half_) return vec4(0.0, 0.0, 0.0, 1.0);
   ivec2 t = p / uLayout.x;
   return texelFetch(uTiles, ivec3(p - t * uLayout.x, t.y * uLayout.y + t.x), 0);
 }
@@ -320,5 +336,10 @@ export const CLOUD_DOME_GLSL = /* glsl */ `
 					vec3 lit = ( cloudSunLight * cloud.r + cloudAmbientLight * cloud.g ) / cloudAlpha;
 					texColor = texColor * cloud.a + cloudAlpha * mix( haze, lit, visible );
 				}
+				// No cloud is marched beyond the far limit, so the lowest degrees would show a strip of clear sky
+				// between a deck and the sea. Under a deck that strip is cloud seen through haze: the same grey
+				// (fading out by 4° up, and with the cover, so a fair-weather horizon keeps its colour).
+				float lowSky = cloudHazeGrey * ( 1.0 - smoothstep( 0.0, 0.07, direction.y ) );
+				texColor = mix( texColor, vec3( dot( texColor - sundiscColor, vec3( 0.2126, 0.7152, 0.0722 ) ) * 0.9 ), lowSky );
 			}
 `;

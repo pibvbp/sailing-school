@@ -9,7 +9,7 @@
 // marched about once a second.
 import * as THREE from 'three';
 import { cloudNoise, type CloudNoise } from './cloudNoise';
-import { CloudField, panoDisc } from './cloudField';
+import { CloudField, panoDirection, panoDisc } from './cloudField';
 import { CLOUD_RESOLVE_FRAG, CLOUD_VERT, cloudMarchFragment } from './cloudShaders';
 import type { QualityTier } from '../core/types';
 
@@ -24,18 +24,34 @@ export interface CloudQuality {
   subSteps: number;
   /** Samples toward the sun per lit step. */
   lightSteps: number;
-  /** Tiles marched per frame. */
-  tilesPerFrame: number;
 }
 
 /** Panorama settings per tier; `null` = keep the 2-D layer. */
 export function cloudQualityFor(tier: QualityTier): CloudQuality | null {
   switch (tier) {
-    case 'ultra': return { size: 1536, tile: 192, steps: 56, subSteps: 5, lightSteps: 6, tilesPerFrame: 1 };
-    case 'high': return { size: 1024, tile: 128, steps: 40, subSteps: 4, lightSteps: 5, tilesPerFrame: 1 };
-    case 'medium': return { size: 768, tile: 96, steps: 32, subSteps: 3, lightSteps: 4, tilesPerFrame: 1 };
+    case 'ultra': return { size: 1536, tile: 192, steps: 56, subSteps: 5, lightSteps: 6 };
+    case 'high': return { size: 1024, tile: 128, steps: 40, subSteps: 4, lightSteps: 5 };
+    case 'medium': return { size: 768, tile: 96, steps: 32, subSteps: 3, lightSteps: 4 };
     default: return null;
   }
+}
+
+/**
+ * A generation (every tile once, then the resolve) takes about this long whatever the frame rate: one tile per
+ * frame at 60 fps on every tier, two at 30 fps, one every other frame at 120 fps (review M-9).
+ */
+export const GENERATION_SECONDS = 1;
+/** No frame marches more than this many tiles: a slow frame must not make the next one slower still. */
+export const MAX_TILES_PER_FRAME = 3;
+
+/**
+ * Tiles to march in a frame of `dt` seconds. `credit` carries the fraction of a tile left over from earlier
+ * frames; returns the whole tiles due now and the credit to carry on.
+ */
+export function tilesDue(credit: number, dt: number, tileCount: number): { tiles: number; credit: number } {
+  const total = Math.min(credit + (Math.max(dt, 0) * tileCount) / GENERATION_SECONDS, MAX_TILES_PER_FRAME);
+  const tiles = Math.floor(total);
+  return { tiles, credit: total - tiles };
 }
 
 /** The wind aloft veers and strengthens relative to the surface wind (northern hemisphere). */
@@ -95,6 +111,19 @@ function volumeTexture(size: number, data: Uint8Array, name: string): THREE.Data
   return t;
 }
 
+/** How well the CPU mirror of the field matches a freshly marched panorama (`VolumetricClouds.compareWithField`). */
+export interface CloudMirrorStats {
+  rays: number;
+  /** Mean and worst |GPU − CPU| transmittance over the rays. */
+  meanAbsDifference: number;
+  worstDifference: number;
+  /** Share of rays on which GPU and CPU agree whether the sky behind is more than half hidden. */
+  sameSideOfHalf: number;
+  /** Share of rays the CPU finds more than half hidden: the check means something only if this is not 0 or 1. */
+  coveredFraction: number;
+  correlation: number;
+}
+
 /** Lighting constants of the march (the demo can edit these; call `invalidate()` afterwards). */
 export interface CloudLighting {
   /** First step toward the sun (m). */
@@ -145,6 +174,10 @@ export class VolumetricClouds {
   private readonly scene = new THREE.Scene();
   private readonly mesh: THREE.Mesh;
   private material: THREE.RawShaderMaterial;
+  /** March materials by step counts (see createMaterial). */
+  private readonly materials = new Map<string, THREE.RawShaderMaterial>();
+  /** Fraction of a tile carried over between frames (see tilesDue). */
+  private tileCredit = 0;
   private readonly uniforms: Record<string, THREE.IUniform>;
   /** Three resolved panoramas: the one fading out, the one fading in, and the one the next resolve writes. */
   private readonly targets: THREE.WebGLRenderTarget[] = [];
@@ -270,17 +303,28 @@ export class VolumetricClouds {
     };
   }
 
+  /**
+   * The march material for the current step counts. One is kept per combination, so a governor that flips
+   * between two tiers compiles each program once instead of at every flip (review M-1).
+   */
   private createMaterial(): THREE.RawShaderMaterial {
-    return new THREE.RawShaderMaterial({
-      name: 'CloudMarch',
-      glslVersion: THREE.GLSL3,
-      vertexShader: CLOUD_VERT,
-      fragmentShader: cloudMarchFragment(this.quality.steps, this.quality.subSteps, this.quality.lightSteps),
-      uniforms: this.uniforms,
-      depthTest: false,
-      depthWrite: false,
-      blending: THREE.NoBlending,
-    });
+    const q = this.quality;
+    const key = `${q.steps}x${q.subSteps}x${q.lightSteps}`;
+    let material = this.materials.get(key);
+    if (!material) {
+      material = new THREE.RawShaderMaterial({
+        name: 'CloudMarch',
+        glslVersion: THREE.GLSL3,
+        vertexShader: CLOUD_VERT,
+        fragmentShader: cloudMarchFragment(q.steps, q.subSteps, q.lightSteps),
+        uniforms: this.uniforms,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.NoBlending,
+      });
+      this.materials.set(key, material);
+    }
+    return material;
   }
 
   setCover(cover: number): void {
@@ -294,7 +338,6 @@ export class VolumetricClouds {
     this.quality = quality;
     this.field.drawnSteps = quality.steps * quality.subSteps;
     if (recompile) {
-      this.material.dispose();
       this.material = this.createMaterial();
       this.mesh.material = this.material;
     }
@@ -321,14 +364,52 @@ export class VolumetricClouds {
   }
 
   /**
-   * Per frame: march up to `tiles` tiles of the generation in flight (0 = none this frame) and point the dome's
-   * uniforms at the two newest complete panoramas. `camera` is the world position of the eye.
+   * Per frame: march the tiles that are due after `dt` seconds (a generation per `GENERATION_SECONDS`, whatever
+   * the frame rate) unless `work` is false (the frame's GPU budget went elsewhere), and point the dome's uniforms
+   * at the two newest complete panoramas. `camera` is the world position of the eye.
    */
-  update(camera: THREE.Vector3, sunDirection: THREE.Vector3, tiles: number = this.quality.tilesPerFrame): void {
+  update(camera: THREE.Vector3, sunDirection: THREE.Vector3, dt: number, work = true): void {
     this.cam.copy(camera);
     this.sun.copy(sunDirection);
-    if (tiles > 0) this.march(tiles);
+    if (work) {
+      const due = tilesDue(this.tileCredit, dt, this.tiles.length);
+      this.tileCredit = due.credit;
+      if (due.tiles > 0) this.march(due.tiles);
+    }
     this.syncDome();
+  }
+
+  /**
+   * Did the march really run? The rim of the panorama looks along the horizon, where no cloud is marched, so its
+   * transmittance must be exactly 1. If the march or the resolve program failed to compile, or the layered
+   * half-float framebuffer is incomplete, nothing was drawn and it reads 0: the caller must then fall back to the
+   * 2-D layer, or the sky would silently lose its clouds and its sun disc (review M-2). Call after `renderAll`.
+   */
+  selfTest(): boolean {
+    const target = this.targets[this.cur]!;
+    const size = target.width;
+    const texel = new Uint16Array(4);
+    const previous = this.renderer.getRenderTarget();
+    try {
+      // Just inside the rim, on the +x axis of the disc.
+      const x = Math.min(size - 1, Math.round(size / 2 + (panoDisc(size) * size) / 2 - 1));
+      this.renderer.readRenderTargetPixels(target, x, size >> 1, 1, 1, texel);
+    } catch {
+      return false;
+    } finally {
+      this.renderer.setRenderTarget(previous);
+    }
+    return Math.abs(THREE.DataUtils.fromHalfFloat(texel[3]!) - 1) < 1e-3;
+  }
+
+  /**
+   * Free the panoramas and the tile array on the GPU (19–75 MB) while the clouds are not shown; the field keeps
+   * its drift and cover, and the next `renderAll` re-allocates them (review M-7).
+   */
+  release(): void {
+    for (const t of this.targets) t.dispose();
+    this.tileLayers.dispose();
+    this.tileIndex = -1;
   }
 
   /** March a whole generation now and show it alone (start-up, or after a jump in time). */
@@ -349,6 +430,47 @@ export class VolumetricClouds {
   /** Fraction of the direct sunlight reaching the eye at world position `camera`. */
   sunTransmittance(camera: THREE.Vector3, sunDirection: THREE.Vector3): number {
     return this.field.sunTransmittance(camera.x, camera.y, camera.z, sunDirection.x, sunDirection.y, sunDirection.z);
+  }
+
+  /**
+   * Debug and end-to-end check that the CPU mirror of the field (which dims the sun's light) is the field the GPU
+   * draws: march a fresh panorama, read it back, and compare its transmittance with the CPU march along the same
+   * rays, on a grid of directions over the hemisphere. Synchronous and slow (a full march and an 8 MB readback):
+   * never call it per frame. `demos/env.html?suncheck=1` and the app's `?suncheck=1` (e2e/clouds.spec.ts) use it.
+   */
+  compareWithField(eye: THREE.Vector3, sunDirection: THREE.Vector3): CloudMirrorStats {
+    this.renderAll(eye, sunDirection);
+    const target = this.targets[this.cur]!;
+    const size = target.width;
+    const texels = new Uint16Array(size * size * 4);
+    const previous = this.renderer.getRenderTarget();
+    this.renderer.readRenderTargetPixels(target, 0, 0, size, size, texels);
+    this.renderer.setRenderTarget(previous);
+    const disc = panoDisc(size);
+    const dir = { x: 0, y: 0, z: 0 };
+    const stride = Math.max(1, Math.floor(size / 48));
+    let n = 0, sumAbs = 0, worst = 0, agree = 0, covered = 0;
+    let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+    for (let j = stride >> 1; j < size; j += stride) {
+      for (let i = stride >> 1; i < size; i += stride) {
+        const u = (i + 0.5) / size;
+        const v = (j + 0.5) / size;
+        if (Math.hypot(u - 0.5, v - 0.5) * 2 > disc * 0.97) continue;
+        panoDirection(u, v, disc, dir);
+        const gpu = THREE.DataUtils.fromHalfFloat(texels[(j * size + i) * 4 + 3]!);
+        // The march exactly as the per-frame sun light runs it.
+        const cpu = this.field.viewTransmittance(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z);
+        n++;
+        sumAbs += Math.abs(gpu - cpu);
+        worst = Math.max(worst, Math.abs(gpu - cpu));
+        if ((gpu < 0.5) === (cpu < 0.5)) agree++;
+        if (cpu < 0.5) covered++;
+        sa += gpu; sb += cpu; saa += gpu * gpu; sbb += cpu * cpu; sab += gpu * cpu;
+      }
+    }
+    const cov = sab / n - (sa / n) * (sb / n);
+    const correlation = cov / Math.sqrt(Math.max(1e-12, (saa / n - (sa / n) ** 2) * (sbb / n - (sb / n) ** 2)));
+    return { rays: n, meanAbsDifference: sumAbs / n, worstDifference: worst, sameSideOfHalf: agree / n, coveredFraction: covered / n, correlation };
   }
 
   /** Throw away the generation in flight so the next one picks up edited parameters at once. */
@@ -420,7 +542,7 @@ export class VolumetricClouds {
     for (const t of this.targets) t.dispose();
     this.tileLayers.dispose();
     this.resolveMaterial.dispose();
-    this.material.dispose();
+    for (const m of this.materials.values()) m.dispose();
     this.weatherTex.dispose();
     this.shapeTex.dispose();
     this.detailTex.dispose();

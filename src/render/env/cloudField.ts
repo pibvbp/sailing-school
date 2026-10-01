@@ -306,7 +306,7 @@ export class CloudField {
     if (over <= 0) return 0;
     const m = Math.min(over / p.edge, 1);
     const grow = Math.min(over / p.rise, 1);
-    const topF = p.heightScale * mix(p.heightMin, 1, this.w[1]!) * (0.25 + 0.75 * Math.sqrt(grow));
+    const topF = p.heightScale * mix(p.heightMin, 1, this.w[1]!) * (TOP_AT_OUTLINE + (1 - TOP_AT_OUTLINE) * Math.sqrt(grow));
     const hrel = hf / topF;
     if (hrel >= 1) return 0;
     const envelope = m * Math.min(hf * BASE_RAMP, 1) * Math.min((1 - hrel) * TOP_RAMP, 1);
@@ -318,7 +318,7 @@ export class CloudField {
       (z - dr.z - dr.shape[2]) / p.shapeTile,
       lodShape,
     );
-    const carve = (1 - clamp01((shape - SHAPE_LOW) * SHAPE_GAIN)) * p.erosion * mix(0.6, 1, hrel);
+    const carve = (1 - clamp01((shape - SHAPE_LOW) * SHAPE_GAIN)) * p.erosion * mix(CARVE_AT_BASE, 1, hrel);
     let d = (envelope - carve) / (1 - carve);
     if (d <= 0) return 0;
     const detail = lodDetail < 0 ? DETAIL_MEAN : sampleVolume(
@@ -331,7 +331,7 @@ export class CloudField {
     const fray = (1 - detail) * p.detailErosion;
     d = (d - fray) / (1 - fray);
     if (d <= 0) return 0;
-    return Math.min(d * DENSITY_GAIN, 1) * mix(0.55, 1, hrel);
+    return Math.min(d * DENSITY_GAIN, 1) * mix(DENSITY_AT_BASE, 1, hrel);
   }
 
   /**
@@ -354,11 +354,11 @@ export class CloudField {
     let sum = 0;
     for (let i = 0; i < steps; i++) {
       const t = t0 + (i + 0.5) * step;
-      const footprint = Math.max(0.5 * drawnStep, 1.5 * t * PANO_TEXEL_RAD);
+      const footprint = Math.max(FOOTPRINT_STEPS * drawnStep, FOOTPRINT_TEXELS * t * PANO_TEXEL_RAD);
       const lodShape = Math.max(0, Math.log2(footprint / shapeTexel));
       const lodDetail = Math.log2(footprint / detailTexel);
-      const d = this.density(ox + dx * t, rayAltitude(t, dy, cam), oz + dz * t, lodShape, lodDetail > 4 ? -1 : Math.max(0, lodDetail));
-      if (d > 0) sum += d * (1 - smoothstep(0.7 * CLOUD_MAX_DISTANCE_M, CLOUD_MAX_DISTANCE_M, t));
+      const d = this.density(ox + dx * t, rayAltitude(t, dy, cam), oz + dz * t, lodShape, lodDetail > DETAIL_LOD_CUTOFF ? -1 : Math.max(0, lodDetail));
+      if (d > 0) sum += d * (1 - smoothstep(FADE_START * CLOUD_MAX_DISTANCE_M, CLOUD_MAX_DISTANCE_M, t));
     }
     return sum * step * p.sigma;
   }
@@ -425,6 +425,20 @@ export const SHAPE_LOW = 0.3;
 export const SHAPE_GAIN = 1 / 0.55;
 /** Density reaches its full value this quickly inside the carved boundary: crisp edges instead of a wide fringe. */
 export const DENSITY_GAIN = 3;
+/** Height of a cloud at its outline relative to its middle (it grows toward the middle with the square root). */
+export const TOP_AT_OUTLINE = 0.25;
+/** How strongly the billows carve at a cloud's base relative to its top (bases stay flat). */
+export const CARVE_AT_BASE = 0.6;
+/** Density at a cloud's base relative to its top (liquid water grows with height above the base). */
+export const DENSITY_AT_BASE = 0.55;
+/** Noise footprint of a march sample: this share of the lit sub-step… */
+export const FOOTPRINT_STEPS = 0.5;
+/** …or this many panorama texels at the sample's distance, whichever is larger. */
+export const FOOTPRINT_TEXELS = 1.5;
+/** Detail-noise mip level beyond which the detail is replaced by its mean. */
+export const DETAIL_LOD_CUTOFF = 4;
+/** The field starts fading at this share of `CLOUD_MAX_DISTANCE_M` and is gone at the full distance. */
+export const FADE_START = 0.7;
 
 /** Direct sunlight left after an optical depth of cloud (monotonic, 1 for clear air, never below the floor). */
 export function sunLightThrough(opticalDepth: number): number {

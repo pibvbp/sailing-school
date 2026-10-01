@@ -15,7 +15,13 @@ import * as THREE from 'three';
 const LOD_MIN = 4;
 const SUPPORTED_REVISION = '186';
 /** Texels filtered per unit of work (level 1 of a 256² cube is 98 304 texels: 24 units, ≈ 0.4 ms each on an M2). */
-const TEXELS_PER_UNIT = 4096;
+export const TEXELS_PER_UNIT = 4096;
+/**
+ * Units of a bake that follows a change of light (time of day, cover) are this many times larger: the whole
+ * environment then lands in about 11 frames instead of 37, so the ambient light does not trail the sun by more
+ * than a fifth of a second (review M-3), and the cloud tiles get the frames in between (review M-4).
+ */
+export const URGENT_BAKE_FACTOR = 4;
 
 interface PmremInternals {
   _lodMax: number;
@@ -65,6 +71,7 @@ export class EnvironmentBaker {
   private internals: PmremInternals | null = null;
   private units: Unit[] = [];
   private next = 0;
+  private unitTexels = TEXELS_PER_UNIT;
   private cube: THREE.CubeTexture | null = null;
   private target: THREE.WebGLRenderTarget | null = null;
   private renderCube: (() => void) | null = null;
@@ -95,13 +102,14 @@ export class EnvironmentBaker {
    * Start re-baking `cube` into `target` (a target a previous `bakeNow` returned), a unit per `step()`.
    * Returns false when the incremental path is unavailable: the caller should `bakeNow` instead.
    */
-  begin(renderCube: () => void, cube: THREE.CubeTexture, target: THREE.WebGLRenderTarget): boolean {
+  begin(renderCube: () => void, cube: THREE.CubeTexture, target: THREE.WebGLRenderTarget, texelsPerUnit: number = TEXELS_PER_UNIT): boolean {
     const g = this.internals;
     if (!g) return false;
     this.renderCube = renderCube;
     this.cube = cube;
     this.target = target;
-    this.units = planBake(g._sizeLods);
+    this.unitTexels = texelsPerUnit;
+    this.units = planBake(g._sizeLods, texelsPerUnit);
     this.next = 0;
     return true;
   }
@@ -120,7 +128,7 @@ export class EnvironmentBaker {
     renderer.xr.enabled = false;
 
     // Small levels are quick: take them together until the unit's texel budget is used.
-    let budget = TEXELS_PER_UNIT;
+    let budget = this.unitTexels;
     do {
       const unit = this.units[this.next++]!;
       if (unit.lod === 0) {
@@ -144,7 +152,12 @@ export class EnvironmentBaker {
     return !this.busy;
   }
 
-  /** `_applyGGXFilter` of three r186, restricted to a strip of rows of the output level. */
+  /**
+   * `_applyGGXFilter` of three r186, with its first pass restricted to a strip of rows of the output level. The
+   * second pass, which copies the level back into the environment map, runs once, after the level's last strip:
+   * the border texels of a face are copied from the *neighbouring* face in the scratch target, which may lie in
+   * a strip that is filtered later. Copying strip by strip left those borders one bake behind (review I-1).
+   */
   private filterStrip(g: PmremInternals, target: THREE.WebGLRenderTarget, unit: Unit): void {
     const renderer = this.renderer;
     const ping = g._pingPongRenderTarget!;
@@ -173,13 +186,15 @@ export class EnvironmentBaker {
     renderer.setRenderTarget(ping);
     renderer.render(mesh, this.flatCamera);
 
-    // …and copy the strip back into the environment map.
+    // …and, once every strip of the level has been filtered, copy the whole level back into the environment map
+    // (one bilinear sample per texel: cheap). Each roughness level therefore switches to the new sky in one frame.
+    if (unit.row + unit.rows < 2 * size) return;
     u['envMap']!.value = ping.texture;
     u['roughness']!.value = 0;
     u['mipInt']!.value = g._lodMax - lodOut;
     target.scissorTest = true;
     target.viewport.set(x, y, 3 * size, 2 * size);
-    target.scissor.set(x, y + unit.row, 3 * size, unit.rows);
+    target.scissor.set(x, y, 3 * size, 2 * size);
     renderer.setRenderTarget(target);
     renderer.render(mesh, this.flatCamera);
   }
