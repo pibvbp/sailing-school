@@ -584,6 +584,9 @@ export class Hud {
       this.seenEvents.add(key);
       const spec = EVENT_TOASTS[e.type];
       if (!spec) continue;
+      // A trim-mistake toast is advice; with both sheets locked (the crew is sailing a read-only lesson step)
+      // the learner could not act on it.
+      if ((e.type === 'luffing' || e.type === 'backwinded') && this.filter && !this.filter('mainSheet') && !this.filter('jibSheet')) continue;
       const last = this.lastToastAt.get(e.type);
       if (last !== undefined && e.t - last < spec.cooldown) continue;
       this.lastToastAt.set(e.type, e.t);

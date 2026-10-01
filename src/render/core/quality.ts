@@ -8,6 +8,12 @@
 //               else CPU busy time) when the caller passes it; otherwise the interval (the pre-2026-09-30
 //               rule, which only steps up on displays faster than ≈ 83 Hz). A step-up also needs a clean
 //               cadence: at most 10 % of the window's frames over 20 ms.
+// A capped frame rate is not an overloaded tier. Browsers cap rAF at 30 Hz in battery-saver and low-power modes
+// and on 30 Hz displays; the interval is then long whatever the tier.
+//   with GPU timing    — a long interval with cheap frames (cost under the step-up threshold) holds the tier.
+//   without GPU timing — a step-down is a probe: if the interval does not shorten, even one tier further down,
+//                        the tier was not the bottleneck; the governor returns to where it started and holds
+//                        while the cadence stays in that band (it steps down again only if it gets clearly worse).
 // No oscillation: a step-up that has to be undone within 20 s records how much more the higher tier cost; that
 // tier is retried only when its predicted cost fits (a lighter scene), never on a timer. When the failed step
 // was decided on CPU time alone (no GPU timing), the GPU cost is unknown and the tier is barred for the session.
@@ -53,6 +59,12 @@ export const GOVERNOR = {
   maxStepUpAfterMs: 300_000,
   /** … and it halves back after this long without a step-down. */
   backoffDecayMs: 300_000,
+  /** A step-down "helped" when the interval fell to this fraction of what it was, or less. */
+  probeGain: 0.92,
+  /** Tiers tried below the starting one before a cadence that does not move is called a cap. */
+  probeSteps: 2,
+  /** A capped cadence is held while the interval stays within this band of it. */
+  capBand: [0.8, 1.25],
 } as const;
 
 function median(values: number[]): number {
@@ -90,6 +102,10 @@ export class QualityGovernor {
   private readonly failRatio = new Map<number, number>();
   /** Highest tier index a step-up may reach (lowered when a CPU-only step-up fails). */
   private ceiling: number = TIER_ORDER.length - 1;
+  /** A step-down under test (no GPU timing): where it started, the interval then, and how many tiers were tried. */
+  private probe: { fromIndex: number; interval: number; steps: number } | null = null;
+  /** Cadence (ms) of a frame-rate cap that lower tiers did not shorten; null when none is known. */
+  private cap: number | null = null;
 
   constructor(start: QualityTier) {
     this.settings = tierSettings(start);
@@ -136,7 +152,49 @@ export class QualityGovernor {
     this.resetWindow();
     this.decayBackoff(nowMs);
 
-    if (interval > GOVERNOR.stepDownAboveMs) return this.stepDown(nowMs, useCost ? decision : interval);
+    const index = TIER_ORDER.indexOf(this.settings.tier);
+
+    // A step-down under test: did it shorten the frame interval?
+    if (this.probe) {
+      const probe = this.probe;
+      if (interval <= probe.interval * GOVERNOR.probeGain) {
+        this.probe = null; // it helped — the tier was the bottleneck; carry on as usual from here
+      } else if (probe.steps < GOVERNOR.probeSteps && index > 0) {
+        probe.steps++; // one tier may not reach the next vsync step: try one more before deciding
+        return this.stepDown(nowMs, useCost ? decision : interval);
+      } else {
+        // Lower tiers did not move the cadence: the display or the browser caps the frame rate. Go back and hold.
+        this.probe = null;
+        this.cap = interval;
+        this.lastStepUp = null;
+        this.streakStart = Number.NaN;
+        return index === probe.fromIndex ? false : this.apply(probe.fromIndex, nowMs);
+      }
+    }
+    // A known cap: hold the tier while the cadence stays in its band.
+    if (this.cap !== null) {
+      if (interval < this.cap * GOVERNOR.capBand[0] || interval > this.cap * GOVERNOR.capBand[1]) {
+        this.cap = null; // the cap lifted, or frames got clearly slower: judge afresh
+      } else {
+        this.streakStart = Number.NaN;
+        return false;
+      }
+    }
+
+    if (interval > GOVERNOR.stepDownAboveMs) {
+      if (basis === 'gpu') {
+        // GPU time is measured: a long interval with cheap frames is a capped display, not an overloaded tier.
+        if (decision < GOVERNOR.stepUpBelowMs) {
+          this.streakStart = Number.NaN;
+          return false;
+        }
+        return this.stepDown(nowMs, decision);
+      }
+      this.probe = { fromIndex: index, interval, steps: 1 };
+      const stepped = this.stepDown(nowMs, useCost ? decision : interval);
+      if (!stepped) this.probe = null; // already on the lowest tier
+      return stepped;
+    }
     // A tier that failed before counts only windows where it is predicted to fit, so a retry needs a full
     // (backed-off) streak of them and a scene flickering between cheap and expensive views cannot bounce it.
     if (decision < GOVERNOR.stepUpBelowMs && cadence <= GOVERNOR.stepDownAboveMs && this.nextTierFits(decision)) {
@@ -154,6 +212,8 @@ export class QualityGovernor {
     this.resetWindow();
     this.streakStart = Number.NaN;
     this.lastStepUp = null;
+    this.probe = null;
+    this.cap = null;
     if (tier === null) {
       this.isLocked = false;
       this.stepUpAfterMs = GOVERNOR.stepUpAfterMs;

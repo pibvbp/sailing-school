@@ -200,11 +200,20 @@ export class App implements AppApi {
     this.renderer.setAnimationLoop(this.frame);
   }
 
+  /** Stop drawing and go quiet (the graphics context was lost). */
+  stop(): void {
+    this.renderer.setAnimationLoop(null);
+    this.soundscape.setEnabled(false);
+  }
+
   // ---------------------------------------------------------------------------------------------- AppApi
   get controls(): Controls { return this.sim.controls; }
 
   setMode(m: AppMode): void {
     this.mode = m;
+    // Leaving the lessons ends the running lesson: its locked controls, its marks and its per-frame logic
+    // (which may reset the scenario) must not carry over into Free sail or the Sail lab.
+    if (m !== 'lessons') this.runner.exit();
     if (m === 'free') this.scenario(freeSailScenario());
     if (m === 'lab') {
       this.scenario(labScenario());
@@ -278,6 +287,7 @@ export class App implements AppApi {
     this.syncPrevPose();
     this.sails.reset();
     this.snapBoat = true;
+    this.rig.snap(); // the new start may be far away: cut to it instead of flying there
     this.heave.x = this.heave.v = this.pitch.x = this.pitch.v = this.roll.x = this.roll.v = 0;
     this.applyOceanParams();
     this.hud.syncState({ wind: { ...this.sim.wind.settings } });
@@ -298,6 +308,9 @@ export class App implements AppApi {
 
   setSliceHeight(h: number): void { this.ov.setSliceHeight(h); }
 
+  /** Id of the lesson in progress, or null (used by the e2e tests). */
+  activeLesson(): string | null { return this.runner.activeLessonId; }
+
   /** Lesson ids in catalogue order (used by the e2e smoke test). */
   lessonIds(): string[] { return Object.keys(this.runner.progress()); }
 
@@ -315,6 +328,12 @@ export class App implements AppApi {
 
   /** Sail lab: turn the wind so the towed boat sees the wanted apparent wind angle. */
   private applyLab(p: LabParams): void {
+    // A tow faster than the wind cannot produce every apparent wind angle: keep it just under the wind speed.
+    const tow = Math.min(p.tow, 0.95 * p.tws);
+    if (tow !== p.tow) {
+      p = { ...p, tow };
+      this.lab?.sync(p);
+    }
     this.labParams = p;
     const twa = twaForAwa(p.awa, p.tow, p.tws);
     const twd = wrapPi(this.sim.boat.psi + twa);
@@ -369,7 +388,8 @@ export class App implements AppApi {
   }
 
   private readonly resize = (): void => {
-    const w = innerWidth, h = innerHeight;
+    // A zero-size pane (an embedded preview, a collapsed window) must not put NaN into the projection.
+    const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
     this.renderer.setSize(w, h, false);
     this.post.setSize(w, h);
     this.camera.aspect = w / h;
@@ -412,7 +432,7 @@ export class App implements AppApi {
     const { alpha } = this.loop.advance(dt, scale);
     const snap = this.sim.snapshot();
 
-    this.updateBoatPose(dt, alpha, snap.t);
+    this.updateBoatPose(dt * scale, alpha, snap.t); // paused: the hull stops riding the (frozen) waves too
     const sails = snap.sails;
     this.boat.setPose({
       boomAngle: sails.main.boomAngle,
@@ -460,7 +480,8 @@ export class App implements AppApi {
       heading: snap.boat.heading,
       heel: snap.boat.heel,
       twd: snap.wind.twd,
-      windSide: snap.wind.twa >= 0 ? 1 : -1,
+      // The rig's side (with the sim's hysteresis), not the raw wind angle: no hopping across the cockpit on a dead run.
+      windSide: this.sim.side,
       waterHeight: (x, z) => this.ocean.sampler.heightAt(x, -z, snap.t),
     });
 
@@ -473,7 +494,7 @@ export class App implements AppApi {
     if (this.mode === 'lab') this.lab?.update(snap, dt);
     this.runner.update(snap, dt * scale);
     this.post.render(dt);
-    this.tcam.render(dt, this.hud.telltaleCamRect(), this.scene, this.jibTelltales, this.boatRoot, snap.wind.twa >= 0 ? 1 : -1, THREE.AgXToneMapping);
+    this.tcam.render(dt, this.hud.telltaleCamRect(), this.scene, this.jibTelltales, this.boatRoot, this.sim.side, THREE.AgXToneMapping);
     this.frameTimer.end();
 
     if (this.governor.sample(rawMs, now, this.frameTimer.cost)) this.applyQuality(this.governor.settings);

@@ -152,6 +152,8 @@ export class LessonRunner {
   private lastStatus: TaskStatus = { progress: 0, held: null, done: false };
 
   private hintOn = false;
+  /** "Show me" was pressed in this step. */
+  private demoShown = false;
   private hintReason: 'button' | 'idle' | SimEventType = 'button';
   private hintAge = 0;
   private hintPoll = 0;
@@ -294,7 +296,15 @@ export class LessonRunner {
 
   showMe(): void {
     const step = this.currentStep();
-    if (step?.showMe) this.safely(() => step.showMe!(this.ctx));
+    if (!step?.showMe) return;
+    // The learner asked to watch: from here to the end of the step, the crew's demonstration is not their mistake.
+    this.demoShown = true;
+    if (this.hintOn && this.hintReason !== 'button' && this.hintReason !== 'idle') {
+      this.hintOn = false;
+      this.hintText = null;
+      this.panel.setHint(null);
+    }
+    this.safely(() => step.showMe!(this.ctx));
   }
 
   exit(): void {
@@ -355,6 +365,7 @@ export class LessonRunner {
     this.idle = 0;
     this.hintOn = false;
     this.hintText = null;
+    this.demoShown = false;
     if (step.camera) this.app.setCamera(step.camera);
     if (step.overlays) {
       for (const [k, on] of Object.entries(step.overlays)) {
@@ -466,7 +477,9 @@ export class LessonRunner {
       if (this.seenEvents.has(key)) continue;
       if (this.seenEvents.size > 64) this.seenEvents.clear();
       this.seenEvents.add(key);
-      if (!this.done && MISTAKE_EVENTS.has(e.type)) this.activateHint(e.type);
+      // A mistake hint is advice to someone who can act on it: only on a step with a task, and not while the crew
+      // is demonstrating. On a read-only step the crew is sailing and the learner is reading.
+      if (!this.done && !this.demoShown && this.currentStep()?.task && MISTAKE_EVENTS.has(e.type)) this.activateHint(e.type);
     }
   }
 

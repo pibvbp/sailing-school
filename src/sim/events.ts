@@ -19,11 +19,17 @@ export interface EventInputs {
   mainLeechFull: boolean;
 }
 
+/** Scenario time before trim mistakes are reported (the crew is still settling the sails). */
+const SETTLE_S = 6;
+/** How long a luffing or backwinded state must last before it is an event. */
+const TRIM_HOLD_S = 2;
+
 export class EventDetector {
   private queue: SimEvent[] = [];
   private ironsT = 0;
   private ironsArmed = true;
   private luffT = 0;
+  private backT = 0;
   private lastFired = new Map<SimEventType, number>();
 
   emit(type: SimEventType, t: number, data?: Record<string, number>): void {
@@ -59,14 +65,19 @@ export class EventDetector {
       this.emit('roundUp', s.t);
     }
 
+    // Trim mistakes are sustained states, and a scenario's first seconds are the crew settling the sails: nothing is
+    // reported before SETTLE_S, and a state must last TRIM_HOLD_S before it counts.
+    const settled = s.t >= SETTLE_S;
+
     // Sails luffing while the boat is supposed to be sailing (not head to wind).
     const luffing = Math.max(s.mainLuffing, s.jibSet ? s.jibLuffing : 0);
-    this.luffT = luffing > 0.7 && Math.abs(s.twa) > 40 * DEG ? this.luffT + s.dt : 0;
-    if (this.luffT > 2 && this.debounced('luffing', s.t, 12)) this.emit('luffing', s.t);
+    this.luffT = settled && luffing > 0.7 && Math.abs(s.twa) > 40 * DEG ? this.luffT + s.dt : 0;
+    if (this.luffT > TRIM_HOLD_S && this.debounced('luffing', s.t, 12)) this.emit('luffing', s.t);
 
-    if (s.jibSet && Math.abs(s.twa) > 30 * DEG && s.mainLuffBubble > 0.45 && s.mainLeechFull && this.debounced('backwinded', s.t, 12)) {
-      this.emit('backwinded', s.t);
-    }
+    // The jib's downwash bubbling the main's luff while its leech still draws.
+    const backwinded = s.jibSet && Math.abs(s.twa) > 30 * DEG && s.mainLuffBubble > 0.45 && s.mainLeechFull;
+    this.backT = settled && backwinded ? this.backT + s.dt : 0;
+    if (this.backT > TRIM_HOLD_S && this.debounced('backwinded', s.t, 12)) this.emit('backwinded', s.t);
   }
 
   drain(): SimEvent[] {

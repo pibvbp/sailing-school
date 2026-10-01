@@ -391,6 +391,32 @@ describe('LessonRunner: hints', () => {
     expect(panel.hint).toBeNull();
   });
 
+  it('a mistake on a read-only step is not the learner\u2019s: no hint (the crew is sailing, the learner is reading)', () => {
+    const { panel, runner, h } = setup([speedLesson()]);
+    h.frame();
+    runner.start('speed'); // step 0 has no task
+    h.frame(2);
+    h.frame(1, (s) => { s.events = [{ type: 'backwinded', t: s.t + 0.1 }]; });
+    expect(panel.hint).toBeNull();
+  });
+
+  it('after "Show me" the demonstration\u2019s mistakes raise no hint, and a mistake hint on show is cleared', () => {
+    const lesson = speedLesson();
+    lesson.steps[1]!.hint = () => null;
+    lesson.steps[1]!.showMe = () => {};
+    const { panel, runner, h } = setup([lesson]);
+    h.frame();
+    runner.start('speed');
+    runner.next();
+    h.frame(2);
+    h.frame(1, (s) => { s.events = [{ type: 'crashGybe', t: s.t + 0.1 }]; });
+    expect(panel.hint).toBe(EVENT_HINTS.crashGybe);
+    panel.actions.showMe();
+    expect(panel.hint).toBeNull();
+    h.frame(1, (s) => { s.events = [{ type: 'spinCollapse', t: s.t + 0.1 }]; });
+    expect(panel.hint).toBeNull();
+  });
+
   it('non-mistake events do not trigger hints', () => {
     const { panel, runner, h } = setup([speedLesson()]);
     h.frame();

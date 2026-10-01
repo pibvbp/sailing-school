@@ -61,6 +61,19 @@ test('a lesson starts and its first step renders', async ({ page }) => {
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
+test('switching mode ends the running lesson and unlocks the controls', async ({ page }) => {
+  await boot(page);
+  const first = await page.evaluate(() => window.__app!.lessonIds()[0]!);
+  await page.evaluate((id) => window.__app!.startLesson(id), first);
+  await expect.poll(() => page.evaluate(() => window.__app!.activeLesson())).toBe(first);
+  // Lesson 1 locks the sheets; the mainsheet slider is disabled while it runs.
+  const sheet = page.getByRole('slider', { name: /^Sheet/ }).first();
+  await expect(sheet).toBeDisabled();
+  await page.getByText('Free sail', { exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__app!.activeLesson())).toBeNull();
+  await expect(sheet).toBeEnabled();
+});
+
 test('shows the fallback when WebGL 2 is unavailable', async ({ page }) => {
   await boot(page, 'forceNoWebGL2=1');
   await expect(page.getByRole('heading', { name: /needs WebGL 2/ })).toBeVisible();

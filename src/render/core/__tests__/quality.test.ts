@@ -70,13 +70,73 @@ describe('QualityGovernor', () => {
     expect(gov.settings).toEqual(tierSettings('medium'));
   });
 
-  it('keeps stepping down while frames stay slow, then stops at the bottom tier', () => {
-    const { gov, now } = warmed('ultra');
-    const { changes } = run(gov, 25, 30_000, now);
+  it('keeps stepping down while each lower tier is faster, then stops at the bottom tier', () => {
+    // A slow GPU on a 60 Hz display, no GPU timer: every tier is cheaper, and every step shortens the interval.
+    const work: Work = { ultra: { cpu: 3, gpu: 70 }, high: { cpu: 3, gpu: 55 }, medium: { cpu: 3, gpu: 40 }, low: { cpu: 3, gpu: 25 } };
+    const gov = new QualityGovernor('ultra');
+    const { changes } = simulate(gov, { hz: 60, work, timer: 'none', durationMs: 40_000, startMs: 0 });
     expect(changes.map((c) => c.tier)).toEqual(['high', 'medium', 'low']);
     // Each step waits for the settle period plus a fresh window.
     expect(changes[1]!.at - changes[0]!.at).toBeGreaterThanOrEqual(GOVERNOR.settleMs + GOVERNOR.windowMs);
     expect(gov.settings.tier).toBe('low');
+  });
+
+  describe('a capped frame rate is not an overloaded tier (30 Hz battery saver, low-power mode, 30 Hz display)', () => {
+    it('GPU timer, cheap frames at a 30 Hz cap: the tier holds', () => {
+      const gov = new QualityGovernor('high');
+      const { changes } = simulate(gov, { hz: 30, work: uniform(3, 6), timer: 'gpu', durationMs: 60_000, startMs: 0 });
+      expect(changes).toEqual([]);
+      expect(gov.settings.tier).toBe('high');
+    });
+
+    for (const timer of ['cpu', 'none'] as const) {
+      it(`no GPU timer (${timer}), 30 Hz cap: lower tiers do not shorten the interval, so it returns and holds`, () => {
+        const gov = new QualityGovernor('high');
+        const { changes, timeIn } = simulate(gov, { hz: 30, work: uniform(3, 6), timer, durationMs: 60_000, startMs: 0 });
+        // One probe (two tiers down), undone; nothing afterwards.
+        expect(changes.map((c) => c.tier)).toEqual(['medium', 'low', 'high']);
+        expect(gov.settings.tier).toBe('high');
+        expect(timeIn.medium + timeIn.low).toBeLessThan(8000);
+        expect(60_000 - changes[2]!.at).toBeGreaterThan(40_000); // held for the rest of the minute
+      });
+    }
+
+    it('no GPU timer, 60 Hz: a tier step that does not reach the next vsync is followed by one more that does', () => {
+      // high and medium both miss a vsync (33.3 ms); low makes 60 fps.
+      const work: Work = { ultra: { cpu: 3, gpu: 40 }, high: { cpu: 3, gpu: 30 }, medium: { cpu: 3, gpu: 20 }, low: { cpu: 3, gpu: 12 } };
+      const gov = new QualityGovernor('high');
+      const { changes } = simulate(gov, { hz: 60, work, timer: 'none', durationMs: 30_000, startMs: 0 });
+      expect(changes.map((c) => c.tier)).toEqual(['medium', 'low']);
+      expect(gov.settings.tier).toBe('low');
+    });
+
+    it('GPU timer: a genuinely overloaded 30 fps still steps down, and stops once the frames are cheap', () => {
+      const work: Work = { ultra: { cpu: 3, gpu: 45 }, high: { cpu: 3, gpu: 30 }, medium: { cpu: 3, gpu: 20 }, low: { cpu: 3, gpu: 9 } };
+      const gov = new QualityGovernor('high');
+      const { changes } = simulate(gov, { hz: 30, work, timer: 'gpu', durationMs: 30_000, startMs: 0 });
+      expect(changes.map((c) => c.tier)).toEqual(['medium', 'low']);
+      expect(gov.settings.tier).toBe('low');
+    });
+
+    it('a held cap is dropped when frames get clearly slower: it steps down again', () => {
+      const gov = new QualityGovernor('high');
+      const first = simulate(gov, { hz: 30, work: uniform(3, 6), timer: 'none', durationMs: 30_000, startMs: 0 });
+      expect(gov.settings.tier).toBe('high'); // probed, returned, holding at 33 ms
+      // The scene gets heavy: 66.7 ms frames at high and medium, 33.3 ms at low.
+      const heavy: Work = { ultra: { cpu: 3, gpu: 80 }, high: { cpu: 3, gpu: 60 }, medium: { cpu: 3, gpu: 50 }, low: { cpu: 3, gpu: 20 } };
+      const second = simulate(gov, { hz: 30, work: heavy, timer: 'none', durationMs: 30_000, startMs: first.now });
+      expect(second.changes.map((c) => c.tier)).toEqual(['medium', 'low']);
+      expect(gov.settings.tier).toBe('low');
+    });
+
+    it('lock(null) forgets a cap', () => {
+      const gov = new QualityGovernor('high');
+      const { now } = simulate(gov, { hz: 30, work: uniform(3, 6), timer: 'none', durationMs: 30_000, startMs: 0 });
+      gov.lock('high');
+      gov.lock(null);
+      const { changes } = simulate(gov, { hz: 30, work: uniform(3, 6), timer: 'none', durationMs: 20_000, startMs: now });
+      expect(changes.map((c) => c.tier)).toEqual(['medium', 'low', 'high']); // probes afresh
+    });
   });
 
   it('does not step down for a short burst or a single long hitch (median, not mean)', () => {

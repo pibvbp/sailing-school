@@ -101,6 +101,10 @@ describe('BoatModel pose updates', () => {
     cam.userData[BoatModel.HIDE_HELMSMAN] = true;
     call();
     expect(helm.geometry.drawRange.count).toBe(0);
+    // The shadow pass never calls onBeforeRender, so the range must be whole again once the hidden draw is over —
+    // otherwise the helmsman casts no shadow in the helm view and a flickering one while the telltale cam runs.
+    helm.onAfterRender(null as never, null as never, cam, helm.geometry, helm.material as THREE.Material, null as never);
+    expect(helm.geometry.drawRange.count).toBe(Infinity);
     boat.dispose();
   });
 

@@ -33,6 +33,7 @@ const tmpV = new THREE.Vector3();
 const tmpT = new THREE.Vector3();
 const tmpQ = new THREE.Quaternion();
 const tmpE = new THREE.Euler();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 export class CameraRig {
   mode: CameraKey = 'chase';
@@ -64,6 +65,11 @@ export class CameraRig {
     removeEventListener('pointerup', this.onUp);
     removeEventListener('pointercancel', this.onUp);
     this.dom.removeEventListener('wheel', this.onWheel);
+  }
+
+  /** Jump to the boat on the next update instead of easing there (a new scenario may start far away). */
+  snap(): void {
+    this.snapped = false;
   }
 
   setMode(m: CameraKey): void {
@@ -101,18 +107,29 @@ export class CameraRig {
       return;
     }
     if (!this.dragging || this.dragging.id !== e.pointerId) return;
-    const dx = e.clientX - this.dragging.x;
-    const dy = e.clientY - this.dragging.y;
+    const prevX = this.dragging.x, prevY = this.dragging.y;
+    const dx = e.clientX - prevX;
+    const dy = e.clientY - prevY;
     this.dragging.x = e.clientX;
     this.dragging.y = e.clientY;
     const k = 0.005;
-    // Horizontal drags move the world with the pointer (as in a map or a 3-D viewer): drag right and the scene turns
-    // right — the orbit cameras swing the other way round the boat, the helm and sail views look the other way.
+    // Drags move the world with the pointer (as in a map or a 3-D viewer), in every mode and both directions: drag
+    // right and the scene goes right, drag down and it goes down. The orbit cameras swing the other way round the
+    // boat; the helm and sail views look the other way.
     if (this.mode === 'helm' || this.mode === 'sail') {
       this.lookYaw += dx * k;
-      this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - dy * k, -1.2, 1.4);
+      this.lookPitch = THREE.MathUtils.clamp(this.lookPitch + dy * k, -1.2, 1.4);
     } else if (this.mode === 'top') {
-      this.yaw += dx * k;
+      // Turn the chart with the pointer: by the angle the pointer sweeps round the middle of the view (the boat),
+      // so it follows the hand whether it is grabbed above, below or beside the boat.
+      const r = this.dom.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (Math.hypot(e.clientX - cx, e.clientY - cy) > 12 && Math.hypot(prevX - cx, prevY - cy) > 12) {
+        let da = Math.atan2(e.clientY - cy, e.clientX - cx) - Math.atan2(prevY - cy, prevX - cx);
+        if (da > Math.PI) da -= 2 * Math.PI;
+        else if (da < -Math.PI) da += 2 * Math.PI;
+        this.yaw -= da;
+      }
     } else {
       this.yaw += dx * k;
       this.pitch = THREE.MathUtils.clamp(this.pitch + dy * k, 0.02, 1.45);
@@ -201,7 +218,11 @@ export class CameraRig {
   }
 
   private applyLook(cam: THREE.PerspectiveCamera, roll: number): void {
-    tmpE.set(this.lookPitch, this.lookYaw, roll, 'YXZ');
+    // Look left/right about the world's vertical (the horizon stays level however far the head turns), then up/down
+    // and the heel-following roll in the camera's own frame.
+    tmpQ.setFromAxisAngle(WORLD_UP, this.lookYaw);
+    cam.quaternion.premultiply(tmpQ);
+    tmpE.set(this.lookPitch, 0, roll, 'YXZ');
     tmpQ.setFromEuler(tmpE);
     cam.quaternion.multiply(tmpQ);
   }

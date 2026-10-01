@@ -401,10 +401,15 @@ export class CrewSet {
       this.buffers.push({ mesh, base, baseN, pos, nor });
     });
     this.objects = [this.buffers[0].mesh, this.buffers[1].mesh];
-    // Per-camera hide: a camera flagged HIDE_HELMSMAN draws nothing of him (his shadow still renders).
+    // Per-camera hide: a camera flagged HIDE_HELMSMAN draws nothing of him. The range is restored straight after
+    // the draw, because the shadow pass (which never calls onBeforeRender) must always see the whole figure —
+    // otherwise his shadow vanishes in the helm view and flickers whenever the telltale cam renders.
     const helm = this.buffers[1].mesh;
     helm.onBeforeRender = (_r, _s, camera, geometry) => {
       geometry.setDrawRange(0, camera.userData[HIDE_HELMSMAN] ? 0 : Infinity);
+    };
+    helm.onAfterRender = (_r, _s, _camera, geometry) => {
+      geometry.setDrawRange(0, Infinity);
     };
   }
 

@@ -93,8 +93,11 @@ export class SpinnakerModel {
    * clew becomes the new tack); the pole is unclipped and carried across the bow to the new tack over the transfer.
    */
   drawnPoleTip(c: Controls): Vec3 {
-    const tip = this.poleTip(c);
-    return { x: tip.x, y: tip.y * this.windwardSide * this.poleSide, z: tip.z };
+    const h = this.poleTipH(c);
+    const reach = Math.sqrt(Math.max(S.poleLength ** 2 - (h - S.poleMastH) ** 2, 0.1));
+    // The pole keeps its length: its angle swings through dead ahead (a dip-pole gybe), it does not telescope.
+    const a = this.poleAngle(c) * this.poleSide;
+    return { x: MAST_FRONT_X + reach * Math.cos(a), y: reach * Math.sin(a), z: -h };
   }
 
   private chordAt(psi: number): { x: number; y: number } {

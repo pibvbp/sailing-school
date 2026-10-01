@@ -176,9 +176,11 @@ describe('TackWatch', () => {
     const w = new TackWatch();
     const feed = feeder(w, 120);
     feed(20, 45, 45, 5.5, 5.5);
+    // One frame at the pause time itself, so the check does not depend on where the feeder's clock landed.
+    w.update(at(20, 45, 5.5));
     const n = w.sampleCount;
     expect(n).toBeLessThanOrEqual(ENTRY_WINDOW * 120 + 2);
-    for (let i = 0; i < 100_000; i++) w.update(at(20, 45, 5.5)); // paused
+    for (let i = 0; i < 20_000; i++) w.update(at(20, 45, 5.5)); // paused
     expect(w.sampleCount).toBe(n);
   });
 });

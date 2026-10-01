@@ -16,3 +16,5 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1f33; col
 .fallback { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; background: #0b1f33; }
 .fallback h1 { font-size: 22px; margin: 0 0 8px; }
 .fallback p { color: var(--ink-dim); max-width: 36em; line-height: 1.5; }
+.fallback button { margin-top: 14px; padding: 9px 18px; border: 0; border-radius: 10px; font: inherit; font-weight: 600; color: #0b1f33; background: #ff8a1f; cursor: pointer; }
+.fallback button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
