@@ -149,18 +149,20 @@ These conventions bind every module; most integration bugs come from breaking on
 A tier sets the render resolution, ocean detail, reflections, shadows, bloom, particle counts and sail mesh density
 ([`src/render/core/types.ts`](../src/render/core/types.ts)):
 
-| Tier | Pixel ratio cap × render scale | Ocean FFT, cascades | Ocean mesh | Planar reflection | Shadow map | Bloom | Particles | Sail mesh |
-|---|---|---|---|---|---|---|---|---|
-| Ultra | 2 × 1.0 | 256², 3 | 100 % | full resolution | 4096 | on | 100 % | 100 % |
-| High | 1.5 × 1.0 | 256², 3 | 80 % | half resolution | 2048 | on | 100 % | 100 % |
-| Medium | 1.25 × 0.85 | 128², 2 | 60 % | off | 2048 | on | 60 % | 75 % |
-| Low | 1 × 0.7 | 128², 2 | 40 % | off | 1024 | off | 35 % | 50 % |
+| Tier | Pixel ratio cap × render scale | Ocean FFT, cascades | Ocean mesh | Planar reflection | Shadow map | Bloom | Particles | Sail mesh | Clouds |
+|---|---|---|---|---|---|---|---|---|---|
+| Ultra | 2 × 1.0 | 256², 3 | 100 % | full resolution | 4096 | on | 100 % | 100 % | volumetric, 1536² panorama |
+| High | 1.5 × 1.0 | 256², 3 | 80 % | half resolution | 2048 | on | 100 % | 100 % | volumetric, 1024² |
+| Medium | 1.25 × 0.85 | 128², 2 | 60 % | off | 2048 | on | 60 % | 75 % | volumetric, 768² |
+| Low | 1 × 0.7 | 128², 2 | 40 % | off | 1024 | off | 35 % | 50 % | painted 2-D layer |
 
 The pixel ratio is the device's, capped by the tier and then multiplied by the render scale. Ultra also switches the
 anti-aliasing from FXAA to SMAA (see [rendering.md](rendering.md#post-processing)).
 
 The **governor** ([`quality.ts`](../src/render/core/quality.ts)) runs while quality is set to **Auto**, the default.
-It starts at High and works like this:
+It starts at High, or at Low when WebGL is drawn by a software rasteriser (hardware acceleration switched off, a
+virtual machine, a CI runner; `isSoftwareRenderer` in [`renderer.ts`](../src/render/core/renderer.ts)), where the
+higher tiers would take seconds per frame. It works like this:
 
 - It judges 2-second windows by their **median** frame time, so a single hitch, such as a shader compiling, can't
   cost a tier.
@@ -169,6 +171,10 @@ It starts at High and works like this:
 - It ignores the first 3 seconds (start-up compiles) and the first second after every change.
 - A tier that has to be dropped again soon after a step up isn't simply retried a moment later, so the quality
   doesn't bounce between tiers.
+- A display capped at a lower frame rate (a battery saver, a 30 Hz monitor) looks like a slow GPU from the frame
+  interval alone. Where the GPU's own time can be measured, a long interval with a cheap frame never costs a tier.
+  Where it cannot, a step down is a trial: if up to two lower tiers don't shorten the interval, it is a cap, and the
+  governor goes back to the tier it came from and holds it.
 - Picking a tier in the quality menu locks it; choosing Auto again resumes adapting.
 
 ## Testing strategy

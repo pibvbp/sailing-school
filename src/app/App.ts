@@ -1,7 +1,7 @@
 // The application (plan Task 16): owns the renderer, the scene modules, the simulation and the UI, and
 // implements the AppApi that the HUD, keyboard and lessons drive.
 import * as THREE from 'three';
-import { createRenderer, pixelRatioFor, FloatTargetsUnavailableError } from '../render/core/renderer';
+import { createRenderer, isSoftwareRenderer, pixelRatioFor, FloatTargetsUnavailableError } from '../render/core/renderer';
 import { PostChain } from '../render/core/post';
 import { QualityGovernor } from '../render/core/quality';
 import { FrameTimer } from '../render/core/frameTimer';
@@ -83,7 +83,7 @@ export class App implements AppApi {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 40000);
   sim: Simulation;
-  private readonly governor = new QualityGovernor('high');
+  private readonly governor: QualityGovernor;
   /** Real frame cost (GPU timer query where available, else CPU busy time) for the governor's step-up. */
   private readonly frameTimer: FrameTimer;
   private quality: QualitySettings;
@@ -145,10 +145,14 @@ export class App implements AppApi {
     // The post chain renders several passes per frame; count the whole frame, not just the last pass.
     this.renderer.info.autoReset = false;
     this.frameTimer = new FrameTimer(this.renderer);
+    // With no GPU drawing (hardware acceleration off, a virtual machine) the higher tiers take seconds per frame and
+    // the cloud march would freeze the start: begin on the lightest tier, with the painted cloud layer.
+    const software = isSoftwareRenderer(this.renderer);
+    this.governor = new QualityGovernor(software ? 'low' : 'high');
     this.quality = this.governor.settings;
     this.renderer.setPixelRatio(pixelRatioFor(this.quality));
 
-    this.sky = new SkySystem(this.renderer, this.scene, this.quality, { hours: this.hour, cloudCover: 0.35 });
+    this.sky = new SkySystem(this.renderer, this.scene, this.quality, { hours: this.hour, cloudCover: 0.35, volumetricClouds: !software });
     this.lighting = new Lighting(this.scene, this.sky, this.quality);
     this.land = new Land(this.scene, this.sky);
     this.marks = new Marks(this.scene);

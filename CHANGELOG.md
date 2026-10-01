@@ -18,10 +18,14 @@ First public release.
   - Every task is checked against the live simulation.
   - Hints react to what the boat is doing, and "Show me" lets the crew demonstrate.
   - Each lesson ends with a short quiz, and progress is saved in the browser.
+  - Each step switches on only the overlays it talks about, and a lesson gives the learner's own overlays and camera
+    back when it ends.
 - **Free sail.** A windward–leeward course, with settings for the wind speed (4–25 knots) and direction, gusts,
-  wind shifts (up to ±15°, every 60–300 s) and the time of day.
+  wind shifts (up to ±15°, every 60–300 s) and the time of day. An autopilot holds a close reach until you take the
+  tiller.
 - **Sail lab.** The boat is towed at a steady speed on a fixed heading. You set the apparent wind angle, the wind and
-  the tow speed, and read each sail's lift and drag coefficients, lift-to-drag ratio, drive and heeling force.
+  the tow speed (held just under the wind speed), and read each sail's lift and drag coefficients, lift-to-drag
+  ratio, drive and heeling force.
 - **Physics.** A real-time simulation of the Kestrel 25, a fictional 25 ft keelboat, at a fixed 120 Hz:
   - a wind gradient with gusts, lulls and shifts, and the apparent wind at every sail section;
   - strip-theory sails, with luffing, attached-flow, stall and reversed-flow coefficients calibrated against the ORC
@@ -37,11 +41,13 @@ First public release.
 - **Polars.** The polar table is the steady state of the same simulation, regenerated with `pnpm polars`. It drives
   the polar chart, the target speeds and the laylines.
 - **Overlays:** the wind triangle, force vectors, the points-of-sail wheel, airflow particles, a live flow slice with a
-  pressure map, angle-of-attack colouring on the sails, x-ray water, part labels, laylines, the track, a telltale
-  camera and a polar chart.
+  pressure map, angle-of-attack colouring on the sails, x-ray water with a leeway picture at the keel, part labels,
+  laylines, the track, a telltale close-up and a polar chart. Tags are laid out so that they never overlap one another
+  or hide under a panel.
 - **Instruments.** Boat speed, VMG, heading and course over ground, true and apparent wind, heel, leeway and rudder,
   and a round wind instrument.
-- **Five cameras:** chase, helm, top (wind at the top of the screen), sail view and free.
+- **Five cameras:** chase, helm, top (wind at the top of the screen), sail view and free. They keep the boat in the
+  part of the window that the panels leave free, on a phone as well.
 - **Graphics.**
   - An FFT ocean with whitecaps, gust patches, a wake, the boat's own waves and bow spray, adapted from ABYSSAL and
     wave-riders.

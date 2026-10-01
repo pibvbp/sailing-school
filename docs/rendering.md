@@ -104,7 +104,9 @@ with the surface's own displacement code into:
 The result is read back asynchronously (`readRenderTargetPixelsAsync`), so it is one frame late but never stalls the
 GPU. The boat and the marks ride the waves that are drawn; the boat ignores the waves it makes itself.
 
-**X-ray** turns the water around the boat see-through, to show the keel, rudder, leeway and underwater forces.
+**X-ray** turns the water around the boat see-through, over a pale backdrop, so that the hull's bottom, the keel and
+the rudder stand out. The overlay half of it (the ghosted fins and the leeway picture) is described under
+[The overlays](#the-overlays).
 
 ## Sky, sun and light
 
@@ -234,7 +236,27 @@ The teaching overlays ([`src/render/overlays/`](../src/render/overlays)) are bui
 - **Flow particles** leave comet trails ([`trails.ts`](../src/render/overlays/trails.ts)). Each particle's last
   positions sit in a texture used as a ring buffer, and one instanced draw turns them into tapering ribbons.
 - **Labels** are DOM elements pinned to 3-D points ([`labels.ts`](../src/render/overlays/labels.ts)), so the text
-  stays crisp. They are placed by priority, and a label that would overlap a more important one fades out.
+  stays crisp. A layout pass ([`tagLayout.ts`](../src/render/overlays/tagLayout.ts)) places them every frame, the
+  most important first:
+  - each tag tries its preferred places (beyond its arrow's head, or beside its point), then is pushed outward from
+    the boat, ring by ring, until it overlaps no other tag, no arrow and no part of the HUD;
+  - every place is kept inside the area the panels leave free, which the HUD reports (`Hud.safeArea()`), with the
+    wind dial and the small windows as keep-out rectangles;
+  - a tag that had to move gets a leader line to what it names; one that finds no room is hidden, never stacked;
+  - a tag stays where it is while that place is free, and returns to a better one only after that has been free for
+    a moment, so tags don't flicker between two places.
+
+  The pass is plain arithmetic on reused objects: nothing is allocated per frame, and the DOM is measured only when a
+  tag's text changes shape.
+- **Only what the step talks about.** The Forces overlay can be reduced to named pieces
+  (`Overlays.setForceParts`): a lesson step about lift and drag shows the apparent wind arriving at the sail, lift
+  square to it and drag along it, and little else.
+- **The wind triangle** sits at the masthead when the whole triangle fits the free area there. Otherwise it slides
+  down the mast to the highest place where it does.
+- **X-ray** ([`xray.ts`](../src/render/overlays/xray.ts)). The sea opens a clear window round the boat, and the keel
+  and rudder are drawn as ghosts through the hull. At the keel, a leeway picture draws the heading (white) against
+  the track through the water (yellow), the wedge between them and the angle; astern, marks drift away along the
+  track.
 - **True colours.** Overlay colours are pre-compensated for the AgX tone mapping and the current exposure, so a green
   arrow is the palette's green at dawn and at noon.
 - **Only in the main view.** Overlays draw only for the main camera: never in the sea's reflection or the telltale

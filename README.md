@@ -113,18 +113,21 @@ The overlays are in the **View** panel, three of them also on keys:
 
 | Overlay | Key | What it shows |
 |---|---|---|
-| Wind | | The wind triangle: true wind (blue) plus the wind from the boat's own motion (grey) makes the apparent wind (amber). It is drawn at the masthead and at deck level, so you can see the wind twist with height |
-| Forces | V | The sails' total force (red) at their centre of effort, split into drive (green) and heeling force (purple); each sail's lift and drag; the keel's lift, the rudder's force and the hull's resistance; the righting couple when the boat heels |
+| Wind | | The wind triangle: true wind (blue) plus the wind from the boat's own motion (grey) makes the apparent wind (amber). It is drawn at the masthead and at deck level, so you can see the wind twist with height. If the masthead is off screen, the upper triangle slides down the mast to stay in view |
+| Forces | V | The sails' total force (red) at their centre of effort, split into drive (green) and heeling force (purple); each sail's lift and drag; the keel's lift, the rudder's force and the hull's resistance; the righting couple when the boat heels. Lessons show only the arrows they are talking about |
 | Wheel | P | The points of sail on the water around the boat, fixed to the true wind, with a pointer for your heading |
 | Flow | O | Streaks of air bending around the sails, coloured by speed (faster air means lower pressure), turbulent wakes behind stalled sails, and streaks over the water that speed up in the gusts |
 | Slice | | A horizontal cut through the rig, with a pressure map, isobars and streamlines: a textbook diagram, but live. A slider sets its height (4.5 m by default) |
 | AoA | | The sails coloured by angle of attack: blue luffing, green in the groove, red stalled |
-| X-ray | | See-through water: the keel, rudder, leeway and underwater forces |
+| X-ray | | See-through water round the boat: the keel and rudder show through the hull, and a leeway picture at the keel draws where the boat points (white) against where she actually goes (yellow), with the angle between them |
 | Labels | | The names of the boat's parts |
 | Laylines | | Lines from each mark at the boat's best VMG angle, and a line showing where your course takes you |
 | Track | | Where you have sailed over the last 6 minutes |
-| Tell cam | | A picture-in-picture view of the jib's telltales from the helm |
+| Tell cam | | A picture-in-picture close-up of the telltales on the jib's luff, the pair a helmsman steers by |
 | Polar | | The polar diagram: target speed at every wind angle, the best angles to sail up- and downwind, and where you are |
+
+Tags never overlap one another or hide under a panel: each finds a free place near what it names, with a leader
+line when it has to move away.
 
 The instrument strip shows boat speed, VMG, heading and course over ground, true and apparent wind, heel, leeway and
 rudder angle. Next to it is a round wind instrument with the no-go zone marked. Toasts explain events as they happen,
@@ -183,8 +186,8 @@ trim with the sheet sliders on the right.
   `EXT_color_buffer_half_float` or `EXT_color_buffer_float`.
 - **Adaptive graphics quality.** Quality starts on **Auto**: it begins at High, drops a tier when frames take longer
   than 20 ms, and climbs back after 10 seconds under 12 ms. A display that is capped at a lower frame rate (a battery
-  saver, a 30 Hz monitor) is told apart from a slow GPU and keeps its quality. You can also fix the quality at Ultra,
-  High, Medium or Low from the top bar.
+  saver, a 30 Hz monitor) is told apart from a slow GPU and keeps its quality. With no GPU acceleration at all (a
+  software renderer) it starts on Low. You can also fix the quality at Ultra, High, Medium or Low from the top bar.
 - **Lost graphics context.** If the browser takes the graphics context away (a driver reset, too many tabs), the app
   stops, says so and offers to reload.
 - **Sound** starts with your first click or key press (browsers require that), and there is an on/off switch in the

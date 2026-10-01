@@ -56,6 +56,26 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
   return renderer;
 }
 
+/** Names that software rasterisers report as the WebGL renderer. */
+const SOFTWARE_RENDERER = /swiftshader|llvmpipe|softpipe|software rasteri[sz]er|microsoft basic render/i;
+
+/** True for the renderer name of a software rasteriser (SwiftShader, llvmpipe, WARP …). */
+export function isSoftwareRendererName(name: string): boolean {
+  return SOFTWARE_RENDERER.test(name);
+}
+
+/**
+ * True when no GPU is drawing: WebGL runs on a software rasteriser (hardware acceleration switched off, a virtual
+ * machine, a CI runner). Such a machine draws a frame in seconds on the higher tiers, so the app starts on its
+ * lightest one. A browser that hides the renderer's name counts as hardware.
+ */
+export function isSoftwareRenderer(renderer: THREE.WebGLRenderer): boolean {
+  const gl = renderer.getContext();
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  const name: unknown = gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+  return typeof name === 'string' && isSoftwareRendererName(name);
+}
+
 /** Pixel ratio for a quality tier: the device ratio capped by the tier, times its render scale. */
 export function pixelRatioFor(q: { pixelRatioCap: number; renderScale: number }, devicePixelRatio = globalThis.devicePixelRatio ?? 1): number {
   return Math.min(devicePixelRatio, q.pixelRatioCap) * q.renderScale;
